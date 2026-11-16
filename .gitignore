@@ -10,4 +10,7 @@ vite.config.d.ts
 .env.*
 !.env.example
 release-bundles/
+*.p12
+*.pfx
+AuthKey_*.p8
 

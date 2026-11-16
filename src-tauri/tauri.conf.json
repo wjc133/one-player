@@ -44,6 +44,9 @@
       "icons/icon.ico"
     ],
     "category": "Music",
+    "macOS": {
+      "hardenedRuntime": true
+    },
     "shortDescription": "A focused music player with LX custom source support",
     "longDescription": "Search, organize, download and play music through LX-compatible custom source scripts."
   }

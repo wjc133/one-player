@@ -6,7 +6,7 @@
 
 **搜索、聆听、收藏，把喜欢的音乐留在身边。**
 
-基于 Tauri 2、Rust、React 和 TypeScript 的桌面音乐播放器，支持 LX Music 自定义源、本地音乐库与 WALKMAN 音乐管理。
+基于 Tauri 2、Rust、React 和 TypeScript 的桌面音乐播放器，支持 LX 自定义源、本地音乐库与 WALKMAN 音乐管理。
 
 [![Release](https://img.shields.io/github/v/release/wjc133/one-player?display_name=tag)](https://github.com/wjc133/one-player/releases)
 [![Build](https://github.com/wjc133/one-player/actions/workflows/release.yml/badge.svg)](https://github.com/wjc133/one-player/actions/workflows/release.yml)
@@ -18,13 +18,13 @@
 
 ## 功能特性
 
-- **多平台音乐搜索**：搜索酷我、酷狗、QQ 音乐、网易云音乐和咪咕的歌曲、专辑，查看专辑曲目并直接加入播放队列。
+- **多平台音乐搜索**：搜索 KW、KG、TX、WY 和 MG 的歌曲、专辑，查看专辑曲目并直接加入播放队列。
 - **专注聆听**：全屏播放页、滚动歌词、顺序播放、列表循环、单曲循环与随机播放，切歌淡入淡出。
 - **自己的音乐库**：创建多个收藏歌单、导入本地音乐，读取歌曲名、歌手、专辑、时长与内嵌封面。
 - **收藏整张专辑**：保存专辑曲目与封面快照；可选收藏时自动下载，也可手动下载整张专辑、补齐尚未下载的歌曲。
 - **下载与离线播放**：显示下载进度，将歌曲信息、封面和 One Player 标记写入音频标签；从下载目录重建已下载列表，支持本地播放与确认后删除文件。
 - **WALKMAN 音乐管理**：检测以 `WALKMAN` 开头的磁盘卷，浏览 `MUSIC` 目录、查看容量、双向复制音乐、补全标签与封面，支持批量处理。
-- **LX 自定义源兼容**：从本地文件或 URL 导入脚本，也可检测本机 LX Music Desktop 并一键导入当前默认自定义源。
+- **LX 自定义源兼容**：从本地文件或 URL 导入脚本，也可检测本机 LX 并一键导入当前默认自定义源。
 - **按习惯设置**：深色、浅色与跟随系统主题，可配置音质、代理和下载目录。
 
 ## 下载安装
@@ -40,11 +40,11 @@
 
 macOS 打开 DMG 后将应用拖入「应用程序」。Linux 的 AppImage 需要先赋予执行权限，例如在下载目录运行 `chmod +x ./*.AppImage`。每个版本同时提供 `SHA256SUMS.txt`，可用 `shasum -a 256`（macOS）或 `sha256sum`（Linux）核对下载文件。
 
-当前发布未配置开发者证书签名或 Apple 公证，macOS Gatekeeper、Windows SmartScreen 可能提示拦截。请仅使用本仓库发布的文件；macOS 的相关说明见 [Apple 官方帮助](https://support.apple.com/zh-cn/102445)。
+macOS 发布流程使用 Developer ID Application 证书签名，执行 Apple 公证并附加公证票据。Windows 安装包暂未配置 Authenticode 签名，SmartScreen 可能显示安全提示。
 
 ## 快速上手
 
-1. 打开 **设置 → 自定义源**，导入你信任的 LX Music 兼容脚本；若本机已安装 LX Music Desktop，也可使用一键导入。
+1. 打开 **设置 → 自定义源**，导入你信任的 LX 兼容脚本；若本机已安装 LX，也可使用一键导入。
 2. 选择音乐平台，搜索歌曲或专辑，即可播放、加入收藏或下载。可用音质取决于源脚本声明的能力及实际返回结果。
 3. 在收藏中创建歌单，或导入本地音乐文件。已下载音乐可以脱离在线音源播放。
 4. 使用 WALKMAN 时，以 USB 存储模式连接设备；设备挂载名称需以 `WALKMAN` 开头，并包含 `MUSIC` 目录。
@@ -53,7 +53,7 @@ macOS 打开 DMG 后将应用拖入「应用程序」。Linux 的 AppImage 需�
 
 ## 自定义源兼容
 
-实现 LX Music Desktop 自定义源 API `2.0.0` 的核心接口：
+实现 LX 自定义源 API `2.0.0` 的核心接口：
 
 | 能力 | 支持内容 |
 | --- | --- |
@@ -65,7 +65,7 @@ macOS 打开 DMG 后将应用拖入「应用程序」。Linux 的 AppImage 需�
 
 脚本在独立 Web Worker 中执行，宿主桥接协议所需的网络、加密和压缩能力，请求设有 20 秒超时。请仅导入信任的脚本；Worker 隔离不等同于完整的恶意代码沙箱。
 
-从 LX Music Desktop 导入时，支持当前 `config_v2.json / user_api.json` 与旧版 `config.json / userApi.json`，可解压 `gz_` zlib 格式脚本；重复导入会复用已有源。同一时间启用一个自定义源。
+从 LX 导入时，支持当前 `config_v2.json / user_api.json` 与旧版 `config.json / userApi.json`，可解压 `gz_` zlib 格式脚本；重复导入会复用已有源。同一时间启用一个自定义源。
 
 ## 本地开发
 
@@ -147,7 +147,9 @@ tag 必须与应用版本严格对应，例如版本 `0.2.0-beta.1` 对应 `v0.2
 
 也可在 **Actions → Release → Run workflow** 手动运行，验证所有平台的打包结果。手动运行仅保留 7 天的构建附件，不创建 Release。发布使用 GitHub 自带的 `GITHUB_TOKEN`，无需额外配置个人访问令牌。
 
-工作流基于 [Tauri 官方 GitHub Actions 指南](https://v2.tauri.app/distribute/pipelines/github/) 与 [tauri-action](https://github.com/tauri-apps/tauri-action)。目前生成的安装包未配置证书签名；需要签名与公证时，可按 [macOS](https://v2.tauri.app/distribute/sign/macos/) 和 [Windows](https://v2.tauri.app/distribute/sign/windows/) 官方文档扩展工作流。
+macOS 构建会导入 Developer ID Application 证书、开启 Hardened Runtime、提交 Apple 公证，并验证签名、公证票据与 Gatekeeper 评估结果；缺少凭据或校验失败会阻止发布。首次配置请参阅 [macOS 签名与公证指南](docs/macos-signing.md)。
+
+发布文案优先读取 `.github/release-notes/<tag>.md`，没有对应版本文件时使用通用模板。工作流基于 [Tauri 官方 GitHub Actions 指南](https://v2.tauri.app/distribute/pipelines/github/) 与 [tauri-action](https://github.com/tauri-apps/tauri-action)。Windows 签名需要另行配置 [Authenticode 证书或签名服务](https://v2.tauri.app/distribute/sign/windows/)。
 
 ## 已知限制
 
@@ -165,6 +167,6 @@ tag 必须与应用版本严格对应，例如版本 `0.2.0-beta.1` 对应 `v0.2
 
 ## 致谢与许可
 
-感谢 [Tauri](https://tauri.app/)、[React](https://react.dev/)、[LX Music Desktop](https://github.com/lyswhut/lx-music-desktop) 以及项目使用的开源依赖。
+感谢 [Tauri](https://tauri.app/)、[React](https://react.dev/)、[LX](https://github.com/lyswhut/lx-music-desktop) 以及项目使用的开源依赖。
 
 One Player 使用 [MIT License](LICENSE)。第三方软件、脚本与音乐内容的权利及许可归各自权利人所有；请确保对访问、下载和管理的内容拥有相应权限。
