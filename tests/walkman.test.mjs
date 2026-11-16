@@ -1,9 +1,32 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { tagSearchQuery, walkmanTagStatus } from '../src/lib/walkman.ts'
+import {
+  selectOnlineTagMetadata,
+  tagSearchQuery,
+  walkmanTagStatus,
+} from '../src/lib/walkman.ts'
 
 test('tag search uses existing metadata when it is available', () => {
   assert.equal(tagSearchQuery({ title: '风花雪', artist: '陈慧琳', relativePath: 'Kelly Chen Collection/05 - track.dsf', missingFields: [] }), '陈慧琳 风花雪')
+})
+
+test('online tag selection can preserve or overwrite existing values', () => {
+  const input = {
+    existing: { title: '旧歌名', artist: '旧歌手', album: '旧专辑' },
+    online: { title: '新歌名', artist: '新歌手', album: '新专辑' },
+    missingFields: ['专辑'],
+  }
+
+  assert.deepEqual(selectOnlineTagMetadata({ ...input, overwriteExisting: true }), {
+    title: '新歌名',
+    artist: '新歌手',
+    album: '新专辑',
+  })
+  assert.deepEqual(selectOnlineTagMetadata({ ...input, overwriteExisting: false }), {
+    title: '旧歌名',
+    artist: '旧歌手',
+    album: '新专辑',
+  })
 })
 
 test('tag search normalizes legacy filenames and nested Windows paths', () => {

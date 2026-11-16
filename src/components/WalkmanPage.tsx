@@ -30,7 +30,14 @@ import {
   updateWalkmanTags,
   deleteWalkmanFile,
 } from '../lib/tauri'
-import { formatStorage, tagSearchQuery, walkmanTagStatus } from '../lib/walkman'
+import {
+  formatStorage,
+  selectOnlineTagMetadata,
+  tagMetadataKeys,
+  tagSearchQuery,
+  walkmanTagStatus,
+} from '../lib/walkman'
+import type { TagMetadataValues } from '../lib/walkman'
 import {
   invalidateWalkmanArtwork,
   loadWalkmanArtwork,
@@ -737,6 +744,9 @@ function TagEditor({
     artist: '',
     album: '',
   })
+  const [onlineMetadata, setOnlineMetadata] = useState<TagMetadataValues | null>(
+    null,
+  )
   const [searching, setSearching] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -786,6 +796,7 @@ function TagEditor({
     setMetadata({ title: file.title, artist: file.artist, album: file.album })
     setResults([])
     setCandidate('')
+    setOnlineMetadata(null)
     setError('')
     setExistingCover(null)
     setCoverError('')
@@ -812,11 +823,25 @@ function TagEditor({
   async function choose(track: MusicTrack) {
     const request = ++coverRequestId.current
     const key = `${track.source}_${track.songmid}`
+    const existing = {
+      title: file.title,
+      artist: file.artist,
+      album: file.album,
+    }
+    const online = {
+      title: track.name,
+      artist: track.singer,
+      album: track.albumName,
+    }
     setCandidate(key)
+    setOnlineMetadata(online)
     setMetadata({
-      title: file.missingFields.includes('歌曲名') ? track.name : file.title,
-      artist: file.missingFields.includes('歌手') ? track.singer : file.artist,
-      album: file.missingFields.includes('专辑') ? track.albumName : file.album,
+      ...selectOnlineTagMetadata({
+        existing,
+        online,
+        missingFields: file.missingFields,
+        overwriteExisting: settings.overwriteExistingTags,
+      }),
       coverUrl: track.img ?? undefined,
       trackKey: key,
     })
@@ -1032,18 +1057,51 @@ function TagEditor({
           </div>
         </div>
         <div className="walkman-tag-fields">
-          {(['title', 'artist', 'album'] as const).map((key, index) => (
-            <label key={key}>
-              {['歌曲名', '歌手', '专辑'][index]}
-              <input
-                value={metadata[key]}
-                onChange={(e) =>
-                  setMetadata((old) => ({ ...old, [key]: e.target.value }))
-                }
-                disabled={saving}
-              />
-            </label>
-          ))}
+          {tagMetadataKeys.map((key, index) => {
+            const original =
+              key === 'title' ? file.title : key === 'artist' ? file.artist : file.album
+            const online = onlineMetadata?.[key]
+            const changed = online !== undefined && online !== original
+            return (
+              <label key={key}>
+                {['歌曲名', '歌手', '专辑'][index]}
+                <input
+                  value={metadata[key]}
+                  onChange={(e) =>
+                    setMetadata((old) => ({ ...old, [key]: e.target.value }))
+                  }
+                  disabled={saving}
+                />
+                {changed && (
+                  <span className="tag-value-diff">
+                    <button
+                      type="button"
+                      className={metadata[key] === original ? 'active' : ''}
+                      disabled={saving}
+                      onClick={() =>
+                        setMetadata((old) => ({ ...old, [key]: original }))
+                      }
+                    >
+                      <span>原值</span>
+                      <strong>{original || '空'}</strong>
+                    </button>
+                    <small>→</small>
+                    <button
+                      type="button"
+                      className={metadata[key] === online ? 'active' : ''}
+                      disabled={saving}
+                      onClick={() =>
+                        setMetadata((old) => ({ ...old, [key]: online }))
+                      }
+                    >
+                      <span>新值</span>
+                      <strong>{online || '空'}</strong>
+                    </button>
+                  </span>
+                )}
+              </label>
+            )
+          })}
         </div>
         {error && (
           <p className="download-error" role="alert">

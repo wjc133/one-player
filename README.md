@@ -25,7 +25,7 @@
 - **下载与离线播放**：显示下载进度，将歌曲信息、封面和 One Player 标记写入音频标签；从下载目录重建已下载列表，支持本地播放与确认后删除文件。
 - **WALKMAN 音乐管理**：检测以 `WALKMAN` 开头的磁盘卷，浏览 `MUSIC` 目录、查看容量、双向复制音乐、补全标签与封面，支持批量处理。
 - **LX 自定义源兼容**：从本地文件或 URL 导入脚本，也可检测本机 LX 并一键导入当前默认自定义源。
-- **按习惯设置**：深色、浅色与跟随系统主题，可配置音质、代理和下载目录。
+- **按习惯设置**：深色、浅色与跟随系统主题，可配置音质、代理、下载目录和标签补全覆盖策略。
 
 ## 下载安装
 
@@ -139,16 +139,16 @@ scripts/                 工具链启动与发布校验脚本
 - `src-tauri/Cargo.toml`
 - `src-tauri/Cargo.lock` 中 `one-player` 包的版本（修改 Cargo.toml 后运行 `cd src-tauri && cargo check` 更新）
 
-例如，发布当前 `0.1.0`：
+例如，发布当前 `0.1.1`：
 
 ```bash
 pnpm release:check
 pnpm test
 git add .
-git commit -m "chore(release): prepare v0.1.0"
-git tag -a v0.1.0 -m "One Player v0.1.0"
+git commit -m "chore(release): prepare v0.1.1"
+git tag -a v0.1.1 -m "One Player v0.1.1"
 git push origin HEAD
-git push origin v0.1.0
+git push origin v0.1.1
 ```
 
 tag 必须与应用版本严格对应，例如版本 `0.2.0-beta.1` 对应 `v0.2.0-beta.1`；版本不一致会在打包前停止工作流。

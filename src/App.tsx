@@ -142,6 +142,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   playQuality: '320k',
   downloadDirectory: '',
   downloadAlbumsOnFavorite: false,
+  overwriteExistingTags: true,
   proxy: '',
 }
 
@@ -3463,6 +3464,24 @@ function SettingsView(props: SettingsViewProps) {
                   props.setSettings((current) => ({
                     ...current,
                     downloadAlbumsOnFavorite: event.target.checked,
+                  }))
+                }
+              />
+              <span />
+            </label>
+          </SettingRow>
+          <SettingRow
+            label="补全标签时覆盖原值"
+            description="关闭后，仅填入文件中缺失的标签；弹窗内仍可手动改用新值"
+          >
+            <label className="switch" title="选择搜索结果时是否覆盖已有标签">
+              <input
+                type="checkbox"
+                checked={props.settings.overwriteExistingTags}
+                onChange={(event) =>
+                  props.setSettings((current) => ({
+                    ...current,
+                    overwriteExistingTags: event.target.checked,
                   }))
                 }
               />

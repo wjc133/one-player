@@ -1,10 +1,45 @@
 import type { WalkmanTrack } from '../types'
 
+export const tagMetadataKeys = ['title', 'artist', 'album'] as const
+
+export type TagMetadataKey = (typeof tagMetadataKeys)[number]
+
+export interface TagMetadataValues {
+  title: string
+  artist: string
+  album: string
+}
+
 export const formatStorage = (bytes: number) => {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
   if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
+
+export const selectOnlineTagMetadata = ({
+  existing,
+  online,
+  missingFields,
+  overwriteExisting,
+}: {
+  existing: TagMetadataValues
+  online: TagMetadataValues
+  missingFields: string[]
+  overwriteExisting: boolean
+}): TagMetadataValues => ({
+  title:
+    overwriteExisting || missingFields.includes('歌曲名')
+      ? online.title
+      : existing.title,
+  artist:
+    overwriteExisting || missingFields.includes('歌手')
+      ? online.artist
+      : existing.artist,
+  album:
+    overwriteExisting || missingFields.includes('专辑')
+      ? online.album
+      : existing.album,
+})
 
 export const tagSearchQuery = (track: WalkmanTrack) => {
   const filename =

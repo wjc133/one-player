@@ -183,6 +183,7 @@ export interface AppSettings {
   playQuality: Quality
   downloadDirectory: string
   downloadAlbumsOnFavorite: boolean
+  overwriteExistingTags: boolean
   proxy: string
 }
 
