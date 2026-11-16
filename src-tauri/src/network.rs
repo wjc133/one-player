@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::HashMap, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::{
@@ -11,7 +7,6 @@ use reqwest::{
     Client, Method, Proxy,
 };
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,7 +42,7 @@ pub struct HttpResponsePayload {
     pub raw_base64: String,
 }
 
-fn build_client(proxy: Option<&str>, timeout_ms: u64) -> Result<Client, String> {
+pub(crate) fn build_client(proxy: Option<&str>, timeout_ms: u64) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(Duration::from_millis(timeout_ms.clamp(1_000, 60_000)))
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -145,56 +140,4 @@ pub async fn proxy_http_request(
         body_text: String::from_utf8_lossy(&bytes).into_owned(),
         raw_base64: BASE64.encode(&bytes),
     })
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DownloadPayload {
-    pub url: String,
-    pub directory: Option<String>,
-    pub file_name: String,
-    pub proxy: Option<String>,
-}
-
-#[tauri::command]
-pub async fn download_file(
-    app: tauri::AppHandle,
-    payload: DownloadPayload,
-) -> Result<String, String> {
-    if !payload.url.starts_with("http://") && !payload.url.starts_with("https://") {
-        return Err("下载地址必须是 HTTP 或 HTTPS".to_string());
-    }
-    let file_name = Path::new(&payload.file_name)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
-        .ok_or_else(|| "缺少下载文件名".to_string())?;
-    let directory = match payload.directory.filter(|path| !path.trim().is_empty()) {
-        Some(path) => PathBuf::from(path),
-        None => app
-            .path()
-            .download_dir()
-            .map_err(|error| format!("无法获取系统下载目录：{error}"))?,
-    };
-    let target = directory.join(file_name);
-
-    if let Some(parent) = target.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-
-    let client = build_client(payload.proxy.as_deref(), 60_000)?;
-    let response = client
-        .get(&payload.url)
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
-    tokio::fs::write(&target, bytes)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(target.to_string_lossy().into_owned())
 }

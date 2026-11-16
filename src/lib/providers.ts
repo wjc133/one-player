@@ -554,7 +554,7 @@ const searchNetease = async (
       songs?: Array<Record<string, unknown>>
     }
   }>(
-    `https://music.163.com/api/search/get/web?csrf_token=&s=${encodeURIComponent(
+    `https://music.163.com/api/cloudsearch/pc?csrf_token=&s=${encodeURIComponent(
       keyword,
     )}&type=1&offset=${offset}&total=true&limit=${limit}`,
     settings,
@@ -589,7 +589,7 @@ const searchNetease = async (
         interval: formatTime(Number(item.duration ?? item.dt) / 1_000),
         albumName: decodeHtml(String(album?.name ?? '')),
         albumId: String(album?.id ?? ''),
-        img: String(album?.picUrl ?? '') || null,
+        img: String(album?.picUrl ?? album?.blurPicUrl ?? '').replace(/^http:/i, 'https:') || null,
         types,
         _types: buildQualityMap(types),
       }),
@@ -1579,6 +1579,24 @@ export const getBuiltinArtwork = async (
       settings,
     )
     return /^https?:/i.test(value.trim()) ? value.trim() : null
+  }
+  if (track.source === 'wy') {
+    const data = await requestJson<{
+      songs?: Array<{ album?: { picUrl?: string; blurPicUrl?: string } }>
+    }>(
+      `https://music.163.com/api/song/detail/?ids=${encodeURIComponent(
+        JSON.stringify([String(track.songmid)]),
+      )}`,
+      settings,
+      {
+        headers: {
+          Referer: 'https://music.163.com/',
+          'User-Agent': 'Mozilla/5.0',
+        },
+      },
+    )
+    const album = data.songs?.[0]?.album
+    return (album?.picUrl || album?.blurPicUrl)?.replace(/^http:/i, 'https:') || null
   }
   return null
 }

@@ -2,13 +2,25 @@
   "name": "one-player",
   "private": true,
   "version": "0.1.0",
+  "description": "A desktop music player with LX-compatible custom sources, local libraries, and WALKMAN management",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wjc133/one-player.git"
+  },
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=24"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:release": "tauri build",
+    "build:release": "pnpm tauri build",
+    "test": "node --test tests/*.test.mjs",
+    "release:check": "node scripts/check-release.mjs",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "node scripts/run-tauri.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

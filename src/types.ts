@@ -34,6 +34,19 @@ export interface MusicTrack {
   trcUrl?: string
   filePath?: string
   ext?: string
+  isLocalLibrary?: boolean
+  downloadKey?: string
+}
+
+export interface LocalMusicMetadata {
+  path: string
+  title: string
+  artist: string
+  album: string
+  durationSeconds: number
+  coverDataUrl?: string
+  trackKey?: string
+  extension: string
 }
 
 export interface SearchResult {
@@ -68,11 +81,25 @@ export interface AlbumDetail {
   list: MusicTrack[]
 }
 
+export interface SavedAlbum {
+  album: AlbumSummary
+  tracks: MusicTrack[]
+  savedAt: number
+  coverDataUrl?: string
+}
+
 export interface LyricPayload {
   lyric: string
   tlyric?: string | null
   rlyric?: string | null
   lxlyric?: string | null
+}
+
+export interface PlayList {
+  id: string
+  name: string
+  tracks: MusicTrack[]
+  createdAt: number
 }
 
 export interface CustomSourceInfo {
@@ -155,10 +182,84 @@ export interface AppSettings {
   theme: 'dark' | 'light' | 'system'
   playQuality: Quality
   downloadDirectory: string
+  downloadAlbumsOnFavorite: boolean
   proxy: string
 }
 
-export interface DownloadItem {
+export type AudioDownloadFormat = 'mp3' | 'flac' | 'wav' | 'ape' | 'dsf' | 'm4a' | 'aac' | 'ogg' | 'opus' | 'aiff' | 'wv'
+
+export interface WalkmanDevice {
+  id: string
+  name: string
+  musicDirectory: string
+  totalBytes: number
+  freeBytes: number
+}
+
+export interface WalkmanTrack {
+  path: string
+  relativePath: string
+  title: string
+  artist: string
+  album: string
+  format: string
+  size: number
+  missingFields: string[]
+  inferredFields: string[]
+  hasCover: boolean
+  modifiedAt: number
+  tagError?: string | null
+}
+
+export interface WalkmanLibrary {
+  files: WalkmanTrack[]
+  issues: string[]
+}
+
+export interface DownloadMetadata {
+  importSource?: string
+  title: string
+  artist: string
+  album: string
+  coverUrl?: string
+  trackKey?: string
+}
+
+export interface DownloadedAudio {
+  importSource?: string | null
+  path: string
+  title: string
+  artist: string
+  album: string
+  format: AudioDownloadFormat
+  size: number
+  modifiedAt: number
+  coverDataUrl?: string
+  trackKey?: string
+}
+
+export interface DownloadProgress {
+  taskId: string
+  progress: number | null
+  receivedBytes: number
+  totalBytes: number | null
+}
+
+export interface DownloadTask {
+  id: string
+  trackKey: string
+  track: MusicTrack
+  quality: Quality
+  status: 'downloading' | 'error'
+  progress: number | null
+  receivedBytes: number
+  totalBytes: number | null
+  message?: string
+  createdAt: number
+  destination?: string
+}
+
+export interface LegacyDownloadItem {
   id: string
   track: MusicTrack
   quality: Quality

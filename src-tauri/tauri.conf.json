@@ -20,13 +20,17 @@
         "center": true,
         "resizable": true,
         "fullscreen": false,
+        "acceptFirstMouse": true,
         "decorations": false,
         "shadow": false,
         "backgroundColor": "#0a0d11"
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true
+      }
     }
   },
   "bundle": {

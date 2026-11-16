@@ -1,6 +1,10 @@
+mod audio_tags;
+mod cover_art;
+mod downloads;
 mod lx_import;
 mod network;
 mod source_store;
+mod walkman;
 
 use std::sync::Mutex;
 
@@ -25,7 +29,19 @@ pub fn run() {
             source_store::remove_custom_source,
             source_store::set_custom_source_update_alert,
             network::proxy_http_request,
-            network::download_file,
+            walkman::detect_walkman,
+            walkman::list_walkman_music,
+            walkman::get_walkman_artwork,
+            walkman::transfer_walkman_file,
+            walkman::update_walkman_tags,
+            walkman::delete_walkman_file,
+            downloads::download_file,
+            downloads::claim_download_file,
+            downloads::list_downloads,
+            downloads::get_download_file_url,
+            downloads::delete_download,
+            downloads::get_local_music_file_url,
+            downloads::inspect_local_music_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running One Player");
