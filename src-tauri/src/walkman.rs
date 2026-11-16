@@ -667,7 +667,10 @@ mod tests {
             .unwrap();
         let expected = album.join("歌手-歌曲.DSF");
         assert_eq!(Path::new(&updated.path), expected);
-        assert_eq!(updated.relative_path, "子目录/歌手-歌曲.DSF");
+        assert_eq!(
+            Path::new(&updated.relative_path),
+            Path::new("子目录").join("歌手-歌曲.DSF")
+        );
         assert!(!source.exists());
         assert!(updated.missing_fields.is_empty());
         let tags = audio_tags::read_tags(&expected, true).unwrap();
