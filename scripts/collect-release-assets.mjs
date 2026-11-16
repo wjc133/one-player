@@ -14,6 +14,8 @@ for (const extension of expected) {
 mkdirSync('release-bundles', { recursive: true })
 for (const path of installers) {
   assert(statSync(path).isFile() && statSync(path).size > 0, `Invalid installer: ${path}`)
-  copyFileSync(path, join('release-bundles', basename(path)))
-  console.log(`Collected ${basename(path)}`)
+  // GitHub replaces spaces in release asset names with dots. Normalize before checksumming.
+  const name = basename(path).replaceAll(' ', '.')
+  copyFileSync(path, join('release-bundles', name))
+  console.log(`Collected ${name}`)
 }
