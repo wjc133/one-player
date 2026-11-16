@@ -81,6 +81,7 @@ jobs:
         with:
           workspaces: src-tauri -> target
           key: ${{ matrix.target }}
+          cache-on-failure: true
       - run: pnpm install --frozen-lockfile
       - name: Test Rust backend
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
@@ -92,6 +93,7 @@ jobs:
         with:
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+          retryAttempts: 2
           uploadUpdaterJson: false
       - name: Collect installers
         env:
