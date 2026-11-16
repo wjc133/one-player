@@ -57,23 +57,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - name: Require macOS signing and notarization credentials
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          for variable in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            if [[ -z "${!variable}" ]]; then
-              echo "::error::Missing repository secret: $variable. See docs/macos-signing.md."
-              exit 1
-            fi
-          done
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -107,35 +90,11 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
           retryAttempts: 2
           uploadUpdaterJson: false
-      - name: Verify macOS signature and notarization
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          RELEASE_TARGET: ${{ matrix.target }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          app="src-tauri/target/$RELEASE_TARGET/release/bundle/macos/One Player.app"
-          codesign --verify --deep --strict --verbose=2 "$app"
-          signing_info="$(codesign -dv --verbose=4 "$app" 2>&1)"
-          [[ "$signing_info" == *"Authority=$APPLE_SIGNING_IDENTITY"* ]]
-          [[ "$signing_info" == *"TeamIdentifier=$APPLE_TEAM_ID"* ]]
-          xcrun stapler validate "$app"
-          spctl --assess --type execute --verbose=2 "$app"
-          for dmg in "src-tauri/target/$RELEASE_TARGET/release/bundle/dmg/"*.dmg; do
-            codesign --verify --strict --verbose=2 "$dmg"
-          done
       - name: Collect installers
         env:
           TAURI_ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}

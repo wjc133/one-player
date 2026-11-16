@@ -40,7 +40,15 @@
 
 macOS 打开 DMG 后将应用拖入「应用程序」。Linux 的 AppImage 需要先赋予执行权限，例如在下载目录运行 `chmod +x ./*.AppImage`。每个版本同时提供 `SHA256SUMS.txt`，可用 `shasum -a 256`（macOS）或 `sha256sum`（Linux）核对下载文件。
 
-macOS 发布流程使用 Developer ID Application 证书签名，执行 Apple 公证并附加公证票据。Windows 安装包暂未配置 Authenticode 签名，SmartScreen 可能显示安全提示。
+当前 macOS 安装包未使用开发者证书签名，也未经过 Apple 公证。如果首次打开提示“应用已损坏”或“无法验证开发者”，确认文件来自本仓库的 Releases，并先将应用拖入「应用程序」，再在终端运行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/One Player.app"
+```
+
+这条命令会移除 One Player 的隔离标记，随后重新打开应用。安装在其他位置时，请将路径替换为实际位置。详见 [macOS 安装说明](docs/macos-installation.md)。
+
+Windows 安装包暂未配置 Authenticode 签名，SmartScreen 可能显示安全提示。
 
 ## 快速上手
 
@@ -147,7 +155,7 @@ tag 必须与应用版本严格对应，例如版本 `0.2.0-beta.1` 对应 `v0.2
 
 也可在 **Actions → Release → Run workflow** 手动运行，验证所有平台的打包结果。手动运行仅保留 7 天的构建附件，不创建 Release。发布使用 GitHub 自带的 `GITHUB_TOKEN`，无需额外配置个人访问令牌。
 
-macOS 构建会导入 Developer ID Application 证书、开启 Hardened Runtime、提交 Apple 公证，并验证签名、公证票据与 Gatekeeper 评估结果；缺少凭据或校验失败会阻止发布。首次配置请参阅 [macOS 签名与公证指南](docs/macos-signing.md)。
+当前工作流发布未使用开发者证书签名、未经过 Apple 公证的 macOS 安装包，无需配置 Apple 证书或公证凭据。macOS 首次打开的处理方法见 [安装说明](docs/macos-installation.md)。
 
 发布文案优先读取 `.github/release-notes/<tag>.md`，没有对应版本文件时使用通用模板。工作流基于 [Tauri 官方 GitHub Actions 指南](https://v2.tauri.app/distribute/pipelines/github/) 与 [tauri-action](https://github.com/tauri-apps/tauri-action)。Windows 签名需要另行配置 [Authenticode 证书或签名服务](https://v2.tauri.app/distribute/sign/windows/)。
 

@@ -45,6 +45,7 @@
     ],
     "category": "Music",
     "macOS": {
+      "signingIdentity": "-",
       "hardenedRuntime": true
     },
     "shortDescription": "A focused music player with LX custom source support",

@@ -9,7 +9,17 @@
 
 `SHA256SUMS.txt` 包含所有安装包的 SHA-256 校验值。
 
-macOS 安装包使用 Developer ID Application 证书签名，应用经过 Apple 公证并附带公证票据。Windows 安装包暂未配置 Authenticode 签名，系统可能显示安全提示。
+### macOS 首次打开
+
+此版本未使用开发者证书签名，也未经过 Apple 公证。如提示“应用已损坏”或“无法验证开发者”，确认下载自本仓库，并将应用拖入「应用程序」后，在终端运行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/One Player.app"
+```
+
+随后重新打开 One Player。若安装在其他目录，请替换为实际应用路径。
+
+Windows 安装包暂未配置 Authenticode 签名，系统可能显示安全提示。
 
 应用不附带自定义音源；在线播放与下载需要自行导入兼容的 LX 自定义源。
 
