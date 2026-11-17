@@ -8,6 +8,10 @@ import type {
   LocalMusicMetadata,
   LxMusicImportResult,
   LxMusicSourceStatus,
+  PlaylistImportPlatform,
+  ImportPlaylistCatalog,
+  PlaylistImportResult,
+  PlayList,
   WalkmanDevice,
   WalkmanLibrary,
   WalkmanTrack,
@@ -25,6 +29,12 @@ export const importCustomSourceScript = (script: string) =>
 export const importCustomSourceFile = (path: string) =>
   invoke<CustomSourceInfo>('import_custom_source_file', { path })
 
+export const inspectCustomSourceUpdate = (id: string, script: string) =>
+  invoke<CustomSourceInfo>('inspect_custom_source_update', { id, script })
+
+export const updateCustomSourceScript = (id: string, script: string) =>
+  invoke<CustomSourceInfo>('update_custom_source_script', { id, script })
+
 export const removeCustomSource = (id: string) =>
   invoke<CustomSourceInfo[]>('remove_custom_source', { id })
 
@@ -37,8 +47,26 @@ export const detectLxMusicSource = () =>
 export const importLxMusicDefaultSource = () =>
   invoke<LxMusicImportResult>('import_lx_music_default_source')
 
+export const detectPlaylistImportPlatforms = () =>
+  invoke<PlaylistImportPlatform[]>('detect_playlist_import_platforms')
+
+export const listImportPlaylists = (source: string) =>
+  invoke<ImportPlaylistCatalog>('list_import_playlists', { source })
+
+export const importPlatformPlaylists = (source: string, playlistIds: string[], proxy?: string) =>
+  invoke<PlaylistImportResult>('import_platform_playlists', { source, playlistIds, proxy })
+
+export const loadStoredPlaylists = () =>
+  invoke<PlayList[] | null>('load_stored_playlists')
+
+export const saveStoredPlaylists = (playlists: PlayList[]) =>
+  invoke<void>('save_stored_playlists', { playlists })
+
 export const requestHttp = (payload: HttpRequestPayload) =>
   invoke<HttpResponsePayload>('proxy_http_request', { payload })
+
+export const getCachedCover = (url: string, proxy?: string) =>
+  invoke<string>('get_cached_cover', { url, proxy })
 
 export interface DownloadPayload {
   taskId: string

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "One Player",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "identifier": "cn.oneplayer.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -35,6 +35,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -50,6 +51,17 @@
     },
     "shortDescription": "A focused music player with LX custom source support",
     "longDescription": "Search, organize, download and play music through LX-compatible custom source scripts."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMxMjA4M0Y4MTNFREM4OEYKUldTUHlPMFQrSU1nd2I5c0F3WjBXbEFjTEh3WmR2VzcvZTJCa2E2YjVJRFlKS2U2R0J5dTJXczMK",
+      "endpoints": [
+        "https://github.com/wjc133/one-player/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
 

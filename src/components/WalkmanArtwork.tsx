@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { LoaderCircle, Music2 } from 'lucide-react'
 import type { WalkmanTrack } from '../types'
 import { getWalkmanArtwork } from '../lib/tauri'
+import { CachedCover } from './CachedCover'
 
 const covers = new Map<string, Promise<string | null>>()
 
@@ -85,10 +86,10 @@ export function WalkmanArtwork({
       }
     >
       {cover && !failed ? (
-        <img
-          src={cover}
+        <CachedCover
+          url={cover}
           alt="歌曲封面"
-          loading="lazy"
+          fallback={<Music2 size={21} />}
           onError={() => setFailed(true)}
         />
       ) : loading ? (

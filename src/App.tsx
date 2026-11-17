@@ -57,6 +57,7 @@ import type {
   DownloadProgress,
   DownloadTask,
   LegacyDownloadItem,
+  ImportedPlaylist,
   LocalMusicMetadata,
   LxMusicSourceStatus,
   LyricPayload,
@@ -78,7 +79,15 @@ import {
   searchMusic,
 } from './lib/providers'
 import { SourceRuntime } from './lib/sourceRuntime'
+import { updateSourceFromUrl } from './lib/sourceUpdater'
 import { WalkmanPage } from './components/WalkmanPage'
+import { AppUpdateConfirmation, AppUpdatePanel } from './components/AppUpdatePanel'
+import { useAppUpdater } from './lib/useAppUpdater'
+import { mergeImportedPlaylists } from './lib/playlistImport'
+import { LibraryNavigation } from './components/LibraryNavigation'
+import { PlaylistImportModal } from './components/PlaylistImportModal'
+import { CachedCover, CoverCacheProvider, useCoverUrl } from './components/CachedCover'
+import { resolveCoverUrl } from './lib/coverCache'
 import {
   deleteDownload,
   detectLxMusicSource,
@@ -92,12 +101,16 @@ import {
   getCustomSourceScript,
   importCustomSourceFile,
   importCustomSourceScript,
+  inspectCustomSourceUpdate,
   importLxMusicDefaultSource,
   listDownloads,
   listCustomSources,
   removeCustomSource,
   requestHttp,
   setCustomSourceUpdateAlert,
+  updateCustomSourceScript,
+  loadStoredPlaylists,
+  saveStoredPlaylists,
 } from './lib/tauri'
 
 type View = 'search' | 'library' | 'downloads' | 'walkman' | 'settings'
@@ -143,6 +156,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   downloadDirectory: '',
   downloadAlbumsOnFavorite: false,
   overwriteExistingTags: true,
+  autoCheckUpdates: true,
   proxy: '',
 }
 
@@ -401,6 +415,8 @@ const trackAlbumSummary = (track: MusicTrack): AlbumSummary | null => {
 function App() {
   const [view, setView] = useState<View>('search')
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
+  const appUpdate = useAppUpdater(settings)
+  const [appUpdateConfirmationOpen, setAppUpdateConfirmationOpen] = useState(false)
   const settingsRef = useRef(settings)
   const [sources, setSources] = useState<CustomSourceInfo[]>([])
   const [activeSourceId, setActiveSourceId] = useState(
@@ -429,12 +445,17 @@ function App() {
   const contentScrollRef = useRef<HTMLDivElement>(null)
 
   const [playlists, setPlaylists] = useState<PlayList[]>(loadPlaylists)
+  const playlistsRef = useRef(playlists)
+  const playlistSaveQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const [playlistStorageReady, setPlaylistStorageReady] = useState(false)
+  const [playlistStorageError, setPlaylistStorageError] = useState('')
   const [activePlaylistId, setActivePlaylistId] = useState('default')
   const [favoriteAlbums, setFavoriteAlbums] =
     useState<SavedAlbum[]>(loadFavoriteAlbums)
   const [playlistPickerTrack, setPlaylistPickerTrack] =
     useState<MusicTrack | null>(null)
   const [playlistCreateOpen, setPlaylistCreateOpen] = useState(false)
+  const [playlistImportOpen, setPlaylistImportOpen] = useState(false)
   const [newPlaylistName, setNewPlaylistName] = useState('')
   const [localMusicImporting, setLocalMusicImporting] = useState(false)
   const [legacyDownloads] = useState<LegacyDownloadItem[]>(() =>
@@ -643,10 +664,14 @@ function App() {
     useState<LxMusicSourceStatus | null>(null)
   const [lxSourceChecking, setLxSourceChecking] = useState(true)
   const [updateAlert, setUpdateAlert] = useState<{
+    sourceId: string
     source: string
     log: string
     updateUrl?: string
   } | null>(null)
+  const [sourceUpdateBusy, setSourceUpdateBusy] = useState(false)
+  const [sourceUpdateError, setSourceUpdateError] = useState('')
+  const sourceUpdateBusyRef = useRef(false)
 
   const lyricLines = useMemo(() => parseLrc(lyrics), [lyrics])
   const activeLyricIndex = useMemo(() => {
@@ -708,11 +733,40 @@ function App() {
     localStorage.setItem(PLAYBACK_MODE_STORAGE_KEY, playbackMode)
   }, [playbackMode])
 
-  useEffect(() => {
-    localStorage.setItem('one-player:playlists', JSON.stringify(playlists))
-  }, [playlists])
+  function persistPlaylists(next: PlayList[]) {
+    const pending = playlistSaveQueueRef.current.catch(() => {}).then(() => saveStoredPlaylists(next))
+    playlistSaveQueueRef.current = pending
+    return pending
+  }
 
   useEffect(() => {
+    let active = true
+    void loadStoredPlaylists().then(async (saved) => {
+      if (!active) return
+      if (saved) {
+        playlistsRef.current = saved.length ? saved : loadPlaylists()
+        setPlaylists(playlistsRef.current)
+      } else {
+        await persistPlaylists(playlistsRef.current)
+      }
+      if (!active) return
+      localStorage.removeItem('one-player:playlists')
+      localStorage.removeItem('one-player:favorites')
+      setPlaylistStorageReady(true)
+    }).catch((error) => {
+      if (active) setPlaylistStorageError(String(error))
+    })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    playlistsRef.current = playlists
+    if (!playlistStorageReady) return
+    void persistPlaylists(playlists).catch((error) => showToast(`保存歌单失败：${String(error)}`))
+  }, [playlists, playlistStorageReady])
+
+  useEffect(() => {
+    if (!playlistStorageReady) return
     const paths = Array.from(
       new Set(
         playlists
@@ -748,7 +802,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [playlistStorageReady])
 
   useEffect(() => {
     localStorage.setItem(
@@ -972,8 +1026,9 @@ function App() {
         getProxy: () => settingsRef.current.proxy,
         onUpdateAlert: (alert) => {
           if (activationId !== sourceActivationRef.current) return
-          if (!source.allowShowUpdateAlert) return
-          setUpdateAlert({ source: source.name, ...alert })
+          if (!source.allowShowUpdateAlert || sourceUpdateBusyRef.current) return
+          setSourceUpdateError('')
+          setUpdateAlert({ sourceId: source.id, source: source.name, ...alert })
         },
         onOpenDevTools: () => {
           if (activationId !== sourceActivationRef.current) return
@@ -991,16 +1046,7 @@ function App() {
       }
       setSourceStatus({ state: 'ready', capabilities })
       if (notify) showToast(`已切换到「${source.name}」`)
-      const supportedProviders = Object.keys(capabilities).filter(
-        (sourceKey): sourceKey is OnlineSourceKey =>
-          sourceKey !== 'local' && sourceKey in providerNames,
-      )
-      if (!capabilities[provider]?.actions.includes('musicUrl')) {
-        const first = supportedProviders.find(
-          (sourceKey) => capabilities[sourceKey]?.actions.includes('musicUrl'),
-        )
-        if (first) setProvider(first)
-      }
+      selectSupportedProvider(capabilities)
     } catch (error) {
       if (activationId !== sourceActivationRef.current) return
       runtime?.dispose()
@@ -1010,6 +1056,19 @@ function App() {
         message: error instanceof Error ? error.message : String(error),
         capabilities: {},
       })
+    }
+  }
+
+  function selectSupportedProvider(capabilities: SourceCapabilities) {
+    const supportedProviders = Object.keys(capabilities).filter(
+      (sourceKey): sourceKey is OnlineSourceKey =>
+        sourceKey !== 'local' && sourceKey in providerNames,
+    )
+    if (!capabilities[provider]?.actions.includes('musicUrl')) {
+      const first = supportedProviders.find(
+        (sourceKey) => capabilities[sourceKey]?.actions.includes('musicUrl'),
+      )
+      if (first) setProvider(first)
     }
   }
 
@@ -1123,31 +1182,7 @@ function App() {
   async function cacheFavoriteAlbumCover(album: AlbumSummary) {
     if (!album.img || album.img.startsWith('data:')) return
     try {
-      const response = await requestHttp({
-        url: album.img,
-        proxy: settingsRef.current.proxy || undefined,
-        timeoutMs: 20_000,
-      })
-      if (
-        response.statusCode < 200 ||
-        response.statusCode >= 300 ||
-        !response.rawBase64
-      ) {
-        return
-      }
-      const contentType =
-        Object.entries(response.headers).find(
-          ([key]) => key.toLocaleLowerCase() === 'content-type',
-        )?.[1]?.split(';')[0] || 'image/jpeg'
-      const coverDataUrl = `data:${contentType};base64,${response.rawBase64}`
-      const key = albumCollectionKey(album)
-      setFavoriteAlbums((current) =>
-        current.map((item) =>
-          albumCollectionKey(item.album) === key
-            ? { ...item, coverDataUrl }
-            : item,
-        ),
-      )
+      await resolveCoverUrl(album.img, settingsRef.current.proxy)
     } catch {}
   }
 
@@ -1516,6 +1551,10 @@ function App() {
   }
 
   function createPlaylist(rawName: string, track?: MusicTrack) {
+    if (!playlistStorageReady) {
+      showToast(playlistStorageError || '正在加载本机歌单，请稍候')
+      return false
+    }
     const name = rawName.trim()
     if (!name) return false
 
@@ -1535,8 +1574,20 @@ function App() {
     return true
   }
 
+  async function importPlaylists(source: OnlineSourceKey, incoming: ImportedPlaylist[]) {
+    const next = mergeImportedPlaylists(playlistsRef.current, source, incoming)
+    await persistPlaylists(next)
+    playlistsRef.current = next
+    setPlaylists(next)
+    const first = next.find((item) =>
+      item.importSource?.platform === source && item.importSource.playlistId === incoming[0]?.externalId,
+    )
+    if (first) setActivePlaylistId(first.id)
+    showToast(`已导入 ${incoming.length} 个歌单`)
+  }
+
   async function importLocalMusicToPlaylist() {
-    if (!activePlaylist || localMusicImporting) return
+    if (!activePlaylist || localMusicImporting || !playlistStorageReady) return
 
     try {
       setLocalMusicImporting(true)
@@ -1597,6 +1648,10 @@ function App() {
   }
 
   function togglePlaylistTrack(playlistId: string, track: MusicTrack) {
+    if (!playlistStorageReady) {
+      showToast(playlistStorageError || '正在加载本机歌单，请稍候')
+      return
+    }
     setPlaylists((current) =>
       current.map((playlist) => {
         if (playlist.id !== playlistId) return playlist
@@ -1908,6 +1963,87 @@ function App() {
     }
   }
 
+  async function handleSourceUpdate() {
+    if (!updateAlert?.updateUrl || sourceBusy || sourceUpdateBusyRef.current) return
+    if (updateAlert.sourceId !== activeSourceId) {
+      setSourceUpdateError('请先切换到提示更新的音源，再重试更新')
+      return
+    }
+    sourceUpdateBusyRef.current = true
+    setSourceUpdateBusy(true)
+    setSourceBusy(true)
+    setSourceUpdateError('')
+    const activationId = sourceActivationRef.current
+    let nextAlert: typeof updateAlert | null = null
+    let candidateActive = false
+    try {
+      const { source, runtime, capabilities } = await updateSourceFromUrl(
+        updateAlert.sourceId,
+        updateAlert.updateUrl,
+        settingsRef.current.proxy,
+        {
+          request: requestHttp,
+          inspect: inspectCustomSourceUpdate,
+          save: async (id, script) => {
+            if (activationId !== sourceActivationRef.current) {
+              throw new Error('当前音源已切换，请重新检查更新')
+            }
+            return updateCustomSourceScript(id, script)
+          },
+          createRuntime: (source) => {
+            const runtime = new SourceRuntime({
+              getProxy: () => settingsRef.current.proxy,
+              onUpdateAlert: (alert) => {
+                if (!source.allowShowUpdateAlert) return
+                const pending = { sourceId: source.id, source: source.name, ...alert }
+                if (!candidateActive) {
+                  nextAlert = pending
+                } else if (runtimeRef.current === runtime) {
+                  setSourceUpdateError('')
+                  setUpdateAlert(pending)
+                }
+              },
+              onOpenDevTools: () => {
+                if (runtimeRef.current === runtime) {
+                  showToast('脚本请求打开调试工具，请在开发模式中检查控制台')
+                }
+              },
+            })
+            return runtime
+          },
+        },
+      )
+      setSources((items) =>
+        items.map((item) => item.id === source.id ? source : item),
+      )
+      if (activationId === sourceActivationRef.current) {
+        sourceActivationRef.current += 1
+        runtimeRef.current?.dispose()
+        runtimeRef.current = runtime
+        candidateActive = true
+        setSourceStatus({ state: 'ready', capabilities })
+        selectSupportedProvider(capabilities)
+        setUpdateAlert(nextAlert)
+      } else {
+        runtime.dispose()
+        setUpdateAlert(null)
+      }
+      showToast(`已更新「${source.name}」${source.version ? `至 v${source.version}` : ''}`)
+    } catch (error) {
+      setSourceUpdateError(`更新失败：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      sourceUpdateBusyRef.current = false
+      setSourceUpdateBusy(false)
+      setSourceBusy(false)
+    }
+  }
+
+  function closeSourceUpdateAlert() {
+    if (sourceUpdateBusyRef.current) return
+    setUpdateAlert(null)
+    setSourceUpdateError('')
+  }
+
   async function refreshLxMusicSource() {
     setLxSourceChecking(true)
     try {
@@ -1995,6 +2131,12 @@ function App() {
     }
   }
 
+  const updateInstallationBlocked =
+    localMusicImporting ||
+    playlistImportOpen ||
+    albumDownloadsInProgress.size > 0 ||
+    downloadTasks.some((task) => task.status === 'downloading')
+
   const navItems: Array<{ id: View; label: string; icon: typeof Search }> = [
     { id: 'search', label: '搜索', icon: Search },
     { id: 'library', label: '我的列表', icon: Library },
@@ -2003,6 +2145,10 @@ function App() {
   ]
 
   return (
+    <CoverCacheProvider
+      proxy={settings.proxy}
+      retryKey={`${view}:${activePlaylistId}:${albumDetail?.album.id ?? ''}:${searchedQuery}:${page}:${playlistImportOpen}`}
+    >
     <div className="app-shell" onPointerDownCapture={event => { downloadPointerRef.current = { x: event.clientX, y: event.clientY } }}>
       <audio
         ref={audioRef}
@@ -2075,8 +2221,8 @@ function App() {
               >
                 <Icon size={19} />
                 <span>{item.label}</span>
-                {item.id === 'library' && favoriteTracks.length > 0 && (
-                  <em>{favoriteTracks.length}</em>
+                {item.id === 'settings' && appUpdate.state.release && (
+                  <em className="app-update-badge">新</em>
                 )}
               </button>
             )
@@ -2144,7 +2290,7 @@ function App() {
 
         <div
           ref={contentScrollRef}
-          className="content-scroll"
+          className={`content-scroll ${view === 'library' ? 'library-content-scroll' : ''}`}
         >
           {view === 'search' && (
             <SearchView
@@ -2192,75 +2338,57 @@ function App() {
           )}
 
           {view === 'library' && (
-            <section className="page-section">
+            <section className="page-section library-page">
               <div className="section-heading">
                 <div>
                   <span className="eyebrow">COLLECTION</span>
                   <h1>我的列表</h1>
-                  <p>
-                    {showingFavoriteAlbums
-                      ? '收藏的专辑会保存在本机，不会上传。'
-                      : '收藏的歌曲会保存在本机，不会上传。'}
-                  </p>
+                  <p>熟悉的音乐，放在一起。</p>
                 </div>
                 <div className="library-heading-actions">
-                  {!showingFavoriteAlbums && activePlaylist && (
-                    <button
-                      className="secondary-button library-local-button"
-                      onClick={() => void importLocalMusicToPlaylist()}
-                      disabled={localMusicImporting}
-                    >
-                      <FolderOpen size={15} />
-                      {localMusicImporting ? '添加中…' : '添加本地音乐'}
-                    </button>
-                  )}
-                  <div className="summary-chip">
-                    {showingFavoriteAlbums ? (
-                      <>
-                        <Disc3 size={18} />
-                        {favoriteAlbums.length} 张专辑
-                      </>
-                    ) : (
-                      <>
-                        <ListMusic size={18} />
-                        {playlists.length} 个列表 · {favoriteTracks.length} 首
-                      </>
-                    )}
-                  </div>
+                  <button className="secondary-button" disabled={!playlistStorageReady} onClick={() => setPlaylistImportOpen(true)}>
+                    <Download size={15} />
+                    导入歌单
+                  </button>
+                  <button className="primary-button" onClick={() => {
+                    setNewPlaylistName('')
+                    setPlaylistCreateOpen(true)
+                  }}>
+                    <Plus size={15} />
+                    新建歌单
+                  </button>
                 </div>
               </div>
-              <div className="playlist-tabs">
-                {playlists.map((playlist) => (
-                  <button
-                    key={playlist.id}
-                    className={playlist.id === activePlaylist?.id ? 'active' : ''}
-                    onClick={() => setActivePlaylistId(playlist.id)}
-                  >
-                    {playlist.name}
-                    <span>{playlist.tracks.length}</span>
-                  </button>
-                ))}
-                <button
-                  className={`album-collection-tab ${
-                    showingFavoriteAlbums ? 'active' : ''
-                  }`}
-                  onClick={() => setActivePlaylistId(ALBUM_COLLECTION_ID)}
-                >
-                  <Disc3 size={15} />
-                  专辑收藏
-                  <span>{favoriteAlbums.length}</span>
-                </button>
-                <button
-                  className="playlist-create"
-                  onClick={() => {
+              {playlistStorageError && <p className="download-error" role="alert">{playlistStorageError}</p>}
+              <div className="library-layout">
+                <LibraryNavigation
+                  playlists={playlists}
+                  activeId={showingFavoriteAlbums ? ALBUM_COLLECTION_ID : activePlaylist?.id ?? ''}
+                  albumCollectionId={ALBUM_COLLECTION_ID}
+                  onSelect={setActivePlaylistId}
+                  onCreate={() => {
                     setNewPlaylistName('')
                     setPlaylistCreateOpen(true)
                   }}
-                >
-                  <Plus size={15} />
-                  新建
-                </button>
-              </div>
+                />
+                <div className="library-detail" key={activePlaylistId}>
+                  <div className="library-detail-heading">
+                    <div>
+                      <span className="eyebrow">{showingFavoriteAlbums ? 'ALBUMS' : activePlaylist?.importSource ? providerNames[activePlaylist.importSource.platform] : 'PLAYLIST'}</span>
+                      <h2>{showingFavoriteAlbums ? '专辑收藏' : activePlaylist?.name}</h2>
+                      <p>{showingFavoriteAlbums ? `${favoriteAlbums.length} 张专辑` : `${activePlaylist?.tracks.length ?? 0} 首歌曲`}</p>
+                    </div>
+                    {!showingFavoriteAlbums && activePlaylist && (
+                      <button
+                        className="secondary-button library-local-button"
+                        onClick={() => void importLocalMusicToPlaylist()}
+                        disabled={localMusicImporting}
+                      >
+                        <FolderOpen size={15} />
+                        {localMusicImporting ? '添加中…' : '添加本地音乐'}
+                      </button>
+                    )}
+                  </div>
               {showingFavoriteAlbums ? (
                 favoriteAlbums.length ? (
                   <div className="album-grid library-album-grid">
@@ -2274,15 +2402,7 @@ function App() {
                           onClick={() => openFavoriteAlbum(savedAlbum)}
                         >
                           <div className="album-card-cover">
-                            {cover ? (
-                              <img
-                                src={cover}
-                                alt=""
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <Music2 size={25} />
-                            )}
+                            <CachedCover url={cover} fallback={<Music2 size={25} />} />
                           </div>
                           <div className="album-card-info">
                             <strong>{album.name}</strong>
@@ -2333,6 +2453,8 @@ function App() {
                   onAction={() => void importLocalMusicToPlaylist()}
                 />
               )}
+                </div>
+              </div>
             </section>
           )}
 
@@ -2377,6 +2499,19 @@ function App() {
               onRemove={(source) => void handleRemoveSource(source)}
               onToggleUpdate={(source) => void handleToggleUpdateAlert(source)}
               onChooseDirectory={() => void chooseDownloadDirectory()}
+              updatePanel={
+                <AppUpdatePanel
+                  updater={appUpdate.updater}
+                  state={appUpdate.state}
+                  currentVersion={appUpdate.currentVersion}
+                  supported={appUpdate.supported}
+                  autoCheckEnabled={settings.autoCheckUpdates}
+                  installationBlocked={updateInstallationBlocked}
+                  onToggleAutoCheck={(enabled) => setSettings((current) => ({ ...current, autoCheckUpdates: enabled }))}
+                  onCheck={() => void appUpdate.updater.check(settings.proxy)}
+                  onConfirmInstall={() => setAppUpdateConfirmationOpen(true)}
+                />
+              }
             />
           )}
         </div>
@@ -2460,33 +2595,78 @@ function App() {
         />
       )}
 
+      {appUpdateConfirmationOpen && (
+        <AppUpdateConfirmation
+          onClose={() => setAppUpdateConfirmationOpen(false)}
+          onInstall={() => {
+            setAppUpdateConfirmationOpen(false)
+            if (!updateInstallationBlocked) void appUpdate.updater.install()
+          }}
+        />
+      )}
+
       {updateAlert && (
-        <div className="modal-backdrop" onClick={() => setUpdateAlert(null)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
-            <button className="modal-close" onClick={() => setUpdateAlert(null)}>
+        <div className="modal-backdrop" onClick={closeSourceUpdateAlert}>
+          <div
+            className="modal-card source-update-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="source-update-title"
+            aria-busy={sourceUpdateBusy}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              onClick={closeSourceUpdateAlert}
+              disabled={sourceUpdateBusy}
+              aria-label="关闭音源更新提示"
+            >
               <X size={18} />
             </button>
             <div className="modal-icon">
               <RefreshCw size={22} />
             </div>
-            <h2>发现音源更新</h2>
+            <h2 id="source-update-title">发现音源更新</h2>
             <p className="modal-source">{updateAlert.source}</p>
             <pre>{updateAlert.log}</pre>
+            {sourceUpdateError && (
+              <p className="source-update-error" role="alert">{sourceUpdateError}</p>
+            )}
             <div className="modal-actions">
               {updateAlert.updateUrl && (
                 <button
                   className="secondary-button"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(updateAlert.updateUrl!)
-                    showToast('更新地址已复制')
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(updateAlert.updateUrl!)
+                      showToast('更新地址已复制')
+                    } catch {
+                      showToast('复制失败，请稍后重试')
+                    }
                   }}
                 >
                   复制更新地址
                 </button>
               )}
-              <button className="primary-button" onClick={() => setUpdateAlert(null)}>
+              <button
+                className={updateAlert.updateUrl ? 'secondary-button' : 'primary-button'}
+                onClick={closeSourceUpdateAlert}
+                disabled={sourceUpdateBusy}
+              >
                 知道了
               </button>
+              {updateAlert.updateUrl && (
+                <button
+                  className="primary-button"
+                  onClick={() => void handleSourceUpdate()}
+                  disabled={sourceBusy || sourceUpdateBusy}
+                >
+                  {sourceUpdateBusy
+                    ? <LoaderCircle className="spin" size={15} />
+                    : <RefreshCw size={15} />}
+                  {sourceUpdateBusy ? '更新中…' : '立即更新'}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -2557,6 +2737,14 @@ function App() {
         </div>
       )}
 
+      {playlistImportOpen && (
+        <PlaylistImportModal
+          proxy={settings.proxy}
+          onImport={importPlaylists}
+          onClose={() => setPlaylistImportOpen(false)}
+        />
+      )}
+
       {downloadChoice && <div className="download-destination-backdrop" onClick={() => setDownloadChoice(null)}><div className="download-destination-menu" role="menu" aria-label="选择下载位置" style={{ left: Math.max(12, Math.min(downloadChoice.x - 220, window.innerWidth - 300)), top: Math.max(12, Math.min(downloadChoice.y + 10, window.innerHeight - 220)) }} onClick={event => event.stopPropagation()}><strong>下载到</strong><button role="menuitem" autoFocus onClick={() => startChosenDownload()}><HardDrive size={19} /><span>下载文件夹<small>保存到电脑，纳入下载管理</small></span></button>{walkmanDevices.map(device => <button role="menuitem" key={device.id} onClick={() => startChosenDownload(device.id)}><Usb size={19} /><span>{device.name}<small>直接保存到 MUSIC · {Math.round(device.freeBytes / 1024 ** 3 * 10) / 10} GB 可用</small></span></button>)}</div></div>}
 
       {downloadToDelete && (
@@ -2607,6 +2795,7 @@ function App() {
 
       {toast && <div className="toast">{toast}</div>}
     </div>
+    </CoverCacheProvider>
   )
 }
 
@@ -2801,15 +2990,7 @@ function SearchView(props: SearchViewProps) {
           <>
             <div className="album-detail-summary">
               <div className="album-detail-cover">
-                {props.albumDetail.album.img ? (
-                  <img
-                    src={props.albumDetail.album.img}
-                    alt=""
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <Music2 size={30} />
-                )}
+                <CachedCover url={props.albumDetail.album.img} fallback={<Music2 size={30} />} />
               </div>
               <div>
                 <span className="eyebrow">
@@ -2886,11 +3067,7 @@ function SearchView(props: SearchViewProps) {
                 onClick={() => props.onOpenAlbum(album)}
               >
                 <div className="album-card-cover">
-                  {album.img ? (
-                    <img src={album.img} alt="" referrerPolicy="no-referrer" />
-                  ) : (
-                    <Music2 size={25} />
-                  )}
+                  <CachedCover url={album.img} fallback={<Music2 size={25} />} />
                 </div>
                 <div className="album-card-info">
                   <strong>{album.name}</strong>
@@ -3097,21 +3274,14 @@ function Artwork({
   size: 'small' | 'medium' | 'large'
 }) {
   const image = url ?? track.img
-  if (image) {
-    return (
-      <img
-        className={`artwork artwork-${size}`}
-        src={image}
-        alt=""
-        referrerPolicy="no-referrer"
-      />
-    )
-  }
   return (
-    <div className={`artwork artwork-${size} artwork-fallback`}>
-      <span>{track.name.slice(0, 1).toUpperCase()}</span>
-      <Music2 size={size === 'large' ? 38 : 16} />
-    </div>
+    <CachedCover
+      url={image}
+      className={`artwork artwork-${size}`}
+      fallbackClassName="artwork-fallback"
+      lazy={size === 'small'}
+      fallback={<><span>{track.name.slice(0, 1).toUpperCase()}</span><Music2 size={size === 'large' ? 38 : 16} /></>}
+    />
   )
 }
 
@@ -3363,6 +3533,7 @@ interface SettingsViewProps {
   onRemove: (source: CustomSourceInfo) => void
   onToggleUpdate: (source: CustomSourceInfo) => void
   onChooseDirectory: () => void
+  updatePanel: React.ReactNode
 }
 
 function SettingsView(props: SettingsViewProps) {
@@ -3377,6 +3548,7 @@ function SettingsView(props: SettingsViewProps) {
       </div>
 
       <div className="settings-grid">
+        <div className="settings-stack">
         <div className="settings-card">
           <div className="settings-card-title">
             <div className="settings-icon">
@@ -3501,6 +3673,8 @@ function SettingsView(props: SettingsViewProps) {
               placeholder="例如 http://127.0.0.1:7890"
             />
           </SettingRow>
+        </div>
+        {props.updatePanel}
         </div>
 
         <div className="settings-card source-manager-card">
@@ -4060,6 +4234,7 @@ interface PlayerPageProps {
 }
 
 function PlayerPage(props: PlayerPageProps) {
+  const { src: cachedArtwork } = useCoverUrl(props.artwork, props.open)
   const [viewport, setViewport] = useState(() => ({
     width: document.documentElement.clientWidth,
     height: document.documentElement.clientHeight,
@@ -4094,8 +4269,8 @@ function PlayerPage(props: PlayerPageProps) {
       Math.min(350, viewport.width * 0.33, (viewport.height - 280) * 0.72),
     ),
   )
-  const artworkBackground = props.artwork
-    ? `linear-gradient(100deg, rgba(7, 10, 13, 0.94), rgba(10, 13, 17, 0.86)), radial-gradient(circle at 18% 30%, rgba(134, 239, 98, 0.08), transparent 35%), url("${props.artwork.replaceAll('"', '\\"')}")`
+  const artworkBackground = cachedArtwork
+    ? `linear-gradient(100deg, rgba(7, 10, 13, 0.94), rgba(10, 13, 17, 0.86)), radial-gradient(circle at 18% 30%, rgba(134, 239, 98, 0.08), transparent 35%), url("${cachedArtwork.replaceAll('"', '\\"')}")`
     : 'radial-gradient(circle at 18% 30%, rgba(134, 239, 98, 0.08), transparent 35%), linear-gradient(100deg, #070a0d, #0a0d11)'
 
   return (

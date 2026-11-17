@@ -535,6 +535,7 @@ pub async fn transfer_walkman_file(
 
 #[tauri::command]
 pub async fn update_walkman_tags(
+    app: tauri::AppHandle,
     device_id: String,
     path: String,
     metadata: DownloadMetadata,
@@ -543,8 +544,12 @@ pub async fn update_walkman_tags(
     let root = music_root(&device_id)?;
     let source = device_file(&root, &path)?;
     tagged_file_name(&source, &metadata)?;
-    let client = crate::network::build_client(proxy.as_deref(), 30_000)?;
-    let cover = downloads::fetch_cover(&client, metadata.cover_url.as_deref()).await?;
+    let cover = crate::cover_cache::fetch_cover(
+        &app,
+        metadata.cover_url.as_deref(),
+        proxy.as_deref(),
+    )
+    .await?;
     if metadata
         .cover_url
         .as_deref()

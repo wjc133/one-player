@@ -126,30 +126,6 @@ fn inspect_local_music_file(path: PathBuf) -> Result<LocalMusicMetadata, String>
     })
 }
 
-pub(crate) async fn fetch_cover(
-    client: &reqwest::Client,
-    cover_url: Option<&str>,
-) -> Result<Option<Vec<u8>>, String> {
-    let Some(cover_url) = cover_url.filter(|url| !url.trim().is_empty()) else {
-        return Ok(None);
-    };
-    if !cover_url.starts_with("http://") && !cover_url.starts_with("https://") {
-        return Ok(None);
-    }
-
-    let bytes = client
-        .get(cover_url)
-        .send()
-        .await
-        .map_err(|error| format!("获取封面失败：{error}"))?
-        .error_for_status()
-        .map_err(|error| format!("获取封面失败：{error}"))?
-        .bytes()
-        .await
-        .map_err(|error| format!("获取封面失败：{error}"))?;
-    Ok(Some(bytes.to_vec()))
-}
-
 fn write_download_metadata(
     path: &Path,
     metadata: &DownloadMetadata,
@@ -158,7 +134,10 @@ fn write_download_metadata(
     crate::audio_tags::write_tags(path, metadata, cover, true)
 }
 
-async fn claim_audio_file(payload: DownloadClaimPayload) -> Result<String, String> {
+async fn claim_audio_file(
+    app: &tauri::AppHandle,
+    payload: DownloadClaimPayload,
+) -> Result<String, String> {
     let path = PathBuf::from(&payload.path);
     if is_supported_audio(&path).is_none() {
         return Err("不支持标记此音频格式".to_string());
@@ -167,8 +146,12 @@ async fn claim_audio_file(payload: DownloadClaimPayload) -> Result<String, Strin
         return Err("下载文件不存在".to_string());
     }
 
-    let client = build_client(payload.proxy.as_deref(), 60_000)?;
-    let cover = fetch_cover(&client, payload.metadata.cover_url.as_deref()).await?;
+    let cover = crate::cover_cache::fetch_cover(
+        app,
+        payload.metadata.cover_url.as_deref(),
+        payload.proxy.as_deref(),
+    )
+    .await?;
     write_download_metadata(&path, &payload.metadata, cover)?;
     Ok(payload.path)
 }
@@ -419,7 +402,13 @@ pub async fn download_file(
         received_bytes,
         total_bytes.or(Some(received_bytes)),
     );
-    let cover = match fetch_cover(&client, payload.metadata.cover_url.as_deref()).await {
+    let cover = match crate::cover_cache::fetch_cover(
+        &app,
+        payload.metadata.cover_url.as_deref(),
+        payload.proxy.as_deref(),
+    )
+    .await
+    {
         Ok(cover) => cover,
         Err(error) => {
             let _ = tokio::fs::remove_file(&temporary_target).await;
@@ -487,8 +476,11 @@ pub async fn download_file(
 }
 
 #[tauri::command]
-pub async fn claim_download_file(payload: DownloadClaimPayload) -> Result<String, String> {
-    claim_audio_file(payload).await
+pub async fn claim_download_file(
+    app: tauri::AppHandle,
+    payload: DownloadClaimPayload,
+) -> Result<String, String> {
+    claim_audio_file(&app, payload).await
 }
 
 #[tauri::command]

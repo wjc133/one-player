@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -24,16 +25,25 @@ if (cargo.status !== 0 || !cargo.stdout.trim()) {
   console.error(`请先安装 Rust ${channel}：rustup toolchain install ${channel}`)
   process.exitCode = 1
 } else {
+  const environment = {
+    ...process.env,
+    PATH: `${dirname(cargo.stdout.trim())}${process.env.PATH ? `${delimiter}${process.env.PATH}` : ''}`,
+  }
+  const signingDirectory = join(homedir(), '.config', 'one-player', 'updater-signing')
+  const signingKey = join(signingDirectory, 'one-player.key')
+  if (process.argv[2] === 'build' && !environment.TAURI_SIGNING_PRIVATE_KEY && existsSync(signingKey)) {
+    environment.TAURI_SIGNING_PRIVATE_KEY = signingKey
+    if (environment.TAURI_SIGNING_PRIVATE_KEY_PASSWORD === undefined) {
+      environment.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = readFileSync(join(signingDirectory, 'password.txt'), 'utf8').trim()
+    }
+  }
   const tauri = spawn(
     join(root, 'node_modules/.bin/tauri'),
     process.argv.slice(2),
     {
       stdio: 'inherit',
       shell: process.platform === 'win32',
-      env: {
-        ...process.env,
-        PATH: `${dirname(cargo.stdout.trim())}${process.env.PATH ? `${delimiter}${process.env.PATH}` : ''}`,
-      },
+      env: environment,
     },
   )
   tauri.on('close', (code) => {

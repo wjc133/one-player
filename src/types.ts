@@ -100,6 +100,45 @@ export interface PlayList {
   name: string
   tracks: MusicTrack[]
   createdAt: number
+  coverUrl?: string | null
+  importSource?: {
+    platform: OnlineSourceKey
+    playlistId: string
+    importedAt: number
+  }
+}
+
+export interface PlaylistImportPlatform {
+  source: OnlineSourceKey
+  name: string
+  installed: boolean
+  canImport: boolean
+  message: string
+}
+
+export interface ImportPlaylistSummary {
+  id: string
+  name: string
+  coverUrl: string | null
+  trackCount: number
+  kind: 'created' | 'subscribed'
+}
+
+export interface ImportPlaylistCatalog {
+  accountName: string
+  playlists: ImportPlaylistSummary[]
+}
+
+export interface ImportedPlaylist {
+  externalId: string
+  name: string
+  coverUrl: string | null
+  tracks: MusicTrack[]
+}
+
+export interface PlaylistImportResult {
+  playlists: ImportedPlaylist[]
+  failures: Array<{ id: string; name: string; message: string }>
 }
 
 export interface CustomSourceInfo {
@@ -184,6 +223,7 @@ export interface AppSettings {
   downloadDirectory: string
   downloadAlbumsOnFavorite: boolean
   overwriteExistingTags: boolean
+  autoCheckUpdates: boolean
   proxy: string
 }
 

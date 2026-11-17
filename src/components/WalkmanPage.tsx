@@ -24,6 +24,7 @@ import type {
   WalkmanTrack,
 } from '../types'
 import { getBuiltinArtwork, providerNames, searchMusic } from '../lib/providers'
+import { CachedCover } from './CachedCover'
 import {
   listWalkmanMusic,
   transferWalkmanFile,
@@ -738,7 +739,7 @@ function TagEditor({
   const [query, setQuery] = useState('')
   const [provider, setProvider] = useState<'all' | OnlineSourceKey>('all')
   const [results, setResults] = useState<MusicTrack[]>([])
-  const [candidate, setCandidate] = useState('')
+  const [candidateIndex, setCandidateIndex] = useState<number | null>(null)
   const [metadata, setMetadata] = useState<DownloadMetadata>({
     title: '',
     artist: '',
@@ -764,7 +765,7 @@ function TagEditor({
     setError('')
     setSearchWarning('')
     setResults([])
-    setCandidate('')
+    setCandidateIndex(null)
     const sources =
       provider === 'all'
         ? (Object.keys(providerNames) as OnlineSourceKey[])
@@ -795,7 +796,7 @@ function TagEditor({
     setQuery(query)
     setMetadata({ title: file.title, artist: file.artist, album: file.album })
     setResults([])
-    setCandidate('')
+    setCandidateIndex(null)
     setOnlineMetadata(null)
     setError('')
     setExistingCover(null)
@@ -820,7 +821,7 @@ function TagEditor({
     }
   }, [file.path])
 
-  async function choose(track: MusicTrack) {
+  async function choose(track: MusicTrack, resultIndex: number) {
     const request = ++coverRequestId.current
     const key = `${track.source}_${track.songmid}`
     const existing = {
@@ -833,7 +834,7 @@ function TagEditor({
       artist: track.singer,
       album: track.albumName,
     }
-    setCandidate(key)
+    setCandidateIndex(resultIndex)
     setOnlineMetadata(online)
     setMetadata({
       ...selectOnlineTagMetadata({
@@ -974,20 +975,16 @@ function TagEditor({
               正在搜索匹配的音乐…
             </div>
           )}
-          {results.map((track) => {
-            const key = `${track.source}_${track.songmid}`
+          {results.map((track, resultIndex) => {
+            const key = `${track.source}_${track.id}_${resultIndex}`
             return (
               <button
                 disabled={saving}
-                className={`walkman-candidate ${candidate === key ? 'selected' : ''}`}
+                className={`walkman-candidate ${candidateIndex === resultIndex ? 'selected' : ''}`}
                 key={key}
-                onClick={() => void choose(track)}
+                onClick={() => void choose(track, resultIndex)}
               >
-                {track.img ? (
-                  <img src={track.img} alt="" referrerPolicy="no-referrer" />
-                ) : (
-                  <Music2 size={32} />
-                )}
+                <CachedCover className="walkman-candidate-cover" url={track.img} fallback={<Music2 size={24} />} />
                 <span>
                   <strong>{track.name}</strong>
                   <small>
@@ -998,7 +995,7 @@ function TagEditor({
                   {providerNames[track.source as OnlineSourceKey]} ·{' '}
                   {track.interval || '—'}
                 </small>
-                {candidate === key && <Check size={18} />}
+                {candidateIndex === resultIndex && <Check size={18} />}
               </button>
             )
           })}
@@ -1008,10 +1005,11 @@ function TagEditor({
             {coverLoading ? (
               <LoaderCircle className="spin" size={24} />
             ) : metadata.coverUrl || existingCover ? (
-              <img
-                src={metadata.coverUrl || existingCover!}
+              <CachedCover
+                url={metadata.coverUrl || existingCover}
                 alt="待写入的歌曲封面"
-                referrerPolicy="no-referrer"
+                lazy={false}
+                fallback={<Music2 size={32} />}
                 onError={() =>
                   setCoverError('封面图片无法预览，请检查地址或更换搜索结果。')
                 }

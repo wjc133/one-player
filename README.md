@@ -21,11 +21,15 @@
 - **多平台音乐搜索**：搜索 KW、KG、TX、WY 和 MG 的歌曲、专辑，查看专辑曲目并直接加入播放队列。
 - **专注聆听**：全屏播放页、滚动歌词、顺序播放、列表循环、单曲循环与随机播放，切歌淡入淡出。
 - **自己的音乐库**：创建多个收藏歌单、导入本地音乐，读取歌曲名、歌手、专辑、时长与内嵌封面。
+- **导入网易云歌单**：macOS 检测已安装的网易云音乐，选择个人创建或收藏的歌单批量导入，重复导入自动合并。歌单导航支持搜索和独立滚动，适合管理数百个歌单。
+- **封面本地缓存**：歌曲、歌单和专辑封面按需加载并保存在本地，重启后继续复用；每次请求 30 秒超时，每轮最多尝试 3 次，失败后重新打开歌单可再次尝试。
 - **收藏整张专辑**：保存专辑曲目与封面快照；可选收藏时自动下载，也可手动下载整张专辑、补齐尚未下载的歌曲。
 - **下载与离线播放**：显示下载进度，将歌曲信息、封面和 One Player 标记写入音频标签；从下载目录重建已下载列表，支持本地播放与确认后删除文件。
 - **WALKMAN 音乐管理**：检测以 `WALKMAN` 开头的磁盘卷，浏览 `MUSIC` 目录、查看容量、双向复制音乐、补全标签与封面，支持批量处理。
 - **LX 自定义源兼容**：从本地文件或 URL 导入脚本，也可检测本机 LX 并一键导入当前默认自定义源。
+- **自定义源更新**：从更新提示中的地址获取新脚本，验证并初始化成功后替换原音源，保留音源标识与更新提醒偏好。
 - **按习惯设置**：深色、浅色与跟随系统主题，可配置音质、代理、下载目录和标签补全覆盖策略。
+- **应用内更新**：启动后及每 6 小时自动检查正式版，在设置中查看更新说明、下载进度，确认后安装并重启；支持关闭自动检查。
 
 ## 下载安装
 
@@ -50,11 +54,21 @@ xattr -dr com.apple.quarantine "/Applications/One Player.app"
 
 Windows 安装包暂未配置 Authenticode 签名，SmartScreen 可能显示安全提示。
 
+### 应用内更新
+
+在 **设置 → 应用更新** 中查看当前版本并手动检查更新。正式构建默认在启动 8 秒后检查一次，此后每 6 小时检查；检查与下载使用通用 HTTP 代理。发现新版本后，设置导航显示「新」标记，不会自动下载或打断播放。
+
+点击「下载更新」后可继续播放音乐；更新包通过签名校验后，点击「安装并重启」并确认才会安装。音乐下载和本地导入尚未完成时禁止安装；WALKMAN 传输和文件编辑应先完成。更新失败可重试，网络不可用不会阻止应用启动或播放。
+
+更新只跟随 GitHub Releases 的最新正式版，不自动切换到 Pre-release。macOS 按 Apple Silicon / Intel 选择更新包；Windows 保留 NSIS / MSI 安装类型；Linux 保留 AppImage / Deb 安装类型，Deb 更新可能需要系统管理员授权。更新包签名用于校验来源，与 Apple 签名、公证和 Windows Authenticode 签名相互独立。
+
+应用内更新从 `v0.2.0` 开始提供。使用 `v0.1.0`、`v0.1.1` 的用户需要先手动下载安装 `v0.2.0` 或更新版本，此后可通过应用内更新升级。
+
 ## 快速上手
 
 1. 打开 **设置 → 自定义源**，导入你信任的 LX 兼容脚本；若本机已安装 LX，也可使用一键导入。
 2. 选择音乐平台，搜索歌曲或专辑，即可播放、加入收藏或下载。可用音质取决于源脚本声明的能力及实际返回结果。
-3. 在收藏中创建歌单，或导入本地音乐文件。已下载音乐可以脱离在线音源播放。
+3. 在「我的列表」中创建歌单、导入本地音乐文件，或点击「导入歌单」选择平台并勾选个人歌单。目前平台歌单导入支持 macOS 上已安装的网易云音乐，需先在网易云登录并加载个人歌单。已下载音乐可以脱离在线音源播放。
 4. 使用 WALKMAN 时，以 USB 存储模式连接设备；设备挂载名称需以 `WALKMAN` 开头，并包含 `MUSIC` 目录。
 
 应用不附带自定义音源、账号或音乐内容。在线搜索结果与播放能力取决于第三方服务及自行导入的脚本。
@@ -92,7 +106,7 @@ rustup toolchain install 1.90.0
 pnpm tauri dev
 ```
 
-`pnpm tauri` 会从项目配置读取 Rust 版本并选择对应工具链。开发模式同时启动 Vite 与桌面窗口，前端改动支持热更新。
+`pnpm tauri` 会从项目配置读取 Rust 版本并选择对应工具链。开发模式同时启动 Vite 与桌面窗口，前端改动支持热更新。开发模式不会自动检查应用更新，仍可手动检查。
 
 ### 常用命令
 
@@ -110,6 +124,8 @@ cargo test --locked --lib
 ```
 
 桌面产物位于 `src-tauri/target/release/bundle/`。单独使用浏览器启动前端时，文件管理、下载、自定义源存储等原生能力需要 Tauri 宿主。Rust 测试中依赖真实设备、外部音频样本或 FFmpeg 的用例默认忽略，可按用例注释在准备好环境后运行。
+
+正式打包会生成更新包及签名，需要 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。本机若已备份到 `~/.config/one-player/updater-signing/one-player.key` 和同目录的 `password.txt`，`pnpm tauri build` / `pnpm build:release` 会自动读取；显式设置的环境变量优先。其他开发机器可以使用维护者提供的签名凭据；仅验证打包流程时，也可通过 Tauri CLI 配置覆盖临时关闭 `bundle.createUpdaterArtifacts`，这些产物不应用作正式更新。
 
 ### 项目结构
 
@@ -130,7 +146,7 @@ scripts/                 工具链启动与发布校验脚本
 
 ## 自动发布
 
-[Release 工作流](.github/workflows/release.yml) 在推送 `v*` tag 时运行，自动完成版本校验、测试、四个平台的打包、SHA-256 校验文件生成以及 GitHub Release 创建与附件上传。所有平台构建成功后才公开 Release；带 `-beta.1` 等后缀的版本自动标记为 Pre-release，并根据提交记录生成更新说明。
+[Release 工作流](.github/workflows/release.yml) 在推送 `v*` tag 时运行，自动完成版本校验、测试、四个构建目标的打包与更新签名、统一 `latest.json` 和 SHA-256 校验文件生成，以及 GitHub Release 创建与附件上传。所有平台构建成功且更新包、签名齐全后才公开 Release；带 `-beta.1` 等后缀的版本自动标记为 Pre-release，并根据提交记录生成更新说明。`latest.json` 使用对应 Release 的完整更新说明。
 
 发布前，让以下四处版本号保持一致：
 
@@ -139,21 +155,28 @@ scripts/                 工具链启动与发布校验脚本
 - `src-tauri/Cargo.toml`
 - `src-tauri/Cargo.lock` 中 `one-player` 包的版本（修改 Cargo.toml 后运行 `cd src-tauri && cargo check` 更新）
 
-例如，发布当前 `0.1.1`：
+例如，发布当前 `0.2.0`：
 
 ```bash
 pnpm release:check
 pnpm test
 git add .
-git commit -m "chore(release): prepare v0.1.1"
-git tag -a v0.1.1 -m "One Player v0.1.1"
+git commit -m "chore(release): 发布 v0.2.0"
+git tag -a v0.2.0 -m "One Player v0.2.0"
 git push origin HEAD
-git push origin v0.1.1
+git push origin v0.2.0
 ```
 
 tag 必须与应用版本严格对应，例如版本 `0.2.0-beta.1` 对应 `v0.2.0-beta.1`；版本不一致会在打包前停止工作流。
 
 也可在 **Actions → Release → Run workflow** 手动运行，验证所有平台的打包结果。手动运行仅保留 7 天的构建附件，不创建 Release。发布使用 GitHub 自带的 `GITHUB_TOKEN`，无需额外配置个人访问令牌。
+
+更新签名要求在 **Settings → Secrets and variables → Actions** 配置：
+
+- `TAURI_SIGNING_PRIVATE_KEY`：加密私钥文件的完整内容。
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：解密私钥的密码。
+
+公钥随 `src-tauri/tauri.conf.json` 提交。私钥和密码保存在仓库外，不能作为构建附件上传。丢失签名密钥会影响已安装客户端继续更新，请同时备份私钥与密码，不要在常规发版时重新生成密钥。
 
 当前工作流发布未使用开发者证书签名、未经过 Apple 公证的 macOS 安装包，无需配置 Apple 证书或公证凭据。macOS 首次打开的处理方法见 [安装说明](docs/macos-installation.md)。
 

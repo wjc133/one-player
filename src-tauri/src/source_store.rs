@@ -256,6 +256,75 @@ pub fn import_custom_source_file(
     import_custom_source_script(app, state, script)
 }
 
+fn prepare_source_update(
+    sources: &[CustomSource],
+    id: &str,
+    script: String,
+) -> Result<CustomSource, String> {
+    let existing = sources
+        .iter()
+        .find(|source| source.id == id)
+        .ok_or_else(|| "自定义源不存在".to_string())?;
+    if existing.script == script {
+        return Err("更新地址返回的脚本与当前版本相同".to_string());
+    }
+    if sources
+        .iter()
+        .any(|source| source.id != id && source.script == script)
+    {
+        return Err("更新脚本与另一个已有音源相同，请直接切换到该音源".to_string());
+    }
+    let (name, description, version, author, homepage) = parse_script_info(&script)?;
+    Ok(CustomSource {
+        id: existing.id.clone(),
+        name,
+        description,
+        version,
+        author,
+        homepage,
+        allow_show_update_alert: existing.allow_show_update_alert,
+        script,
+    })
+}
+
+#[tauri::command]
+pub fn inspect_custom_source_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    script: String,
+) -> Result<CustomSourceInfo, String> {
+    let _guard = state
+        .source_store_lock
+        .lock()
+        .map_err(|_| "无法读取自定义源锁".to_string())?;
+    let source = prepare_source_update(&load_sources(&app)?, &id, script)?;
+    Ok(CustomSourceInfo::from(&source))
+}
+
+#[tauri::command]
+pub fn update_custom_source_script(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    script: String,
+) -> Result<CustomSourceInfo, String> {
+    let _guard = state
+        .source_store_lock
+        .lock()
+        .map_err(|_| "无法写入自定义源锁".to_string())?;
+    let mut sources = load_sources(&app)?;
+    let updated = prepare_source_update(&sources, &id, script)?;
+    let info = CustomSourceInfo::from(&updated);
+    let source = sources
+        .iter_mut()
+        .find(|source| source.id == id)
+        .ok_or_else(|| "自定义源不存在".to_string())?;
+    *source = updated;
+    save_sources(&app, &sources)?;
+    Ok(info)
+}
+
 #[tauri::command]
 pub fn remove_custom_source(
     app: AppHandle,
@@ -294,7 +363,64 @@ pub fn set_custom_source_update_alert(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_script_info, prepare_source_import};
+    use super::{parse_script_info, prepare_source_import, prepare_source_update, MAX_SOURCES};
+
+    fn source_script(version: &str) -> String {
+        format!("/**\n * @name 测试音乐源\n * @version {version}\n */\nconsole.log('ok')")
+    }
+
+    #[test]
+    fn updates_source_metadata_without_changing_identity_or_preferences() {
+        let mut sources = Vec::new();
+        let imported = prepare_source_import(&mut sources, source_script("1.0.0"), false)
+            .expect("source import");
+        sources[0].allow_show_update_alert = false;
+
+        let updated = prepare_source_update(&sources, &imported.source.id, source_script("2.0.0"))
+            .expect("source update");
+
+        assert_eq!(updated.id, imported.source.id);
+        assert_eq!(updated.version, "2.0.0");
+        assert_eq!(updated.script, source_script("2.0.0"));
+        assert!(!updated.allow_show_update_alert);
+        assert_eq!(sources[0].version, "1.0.0");
+        assert_eq!(sources[0].script, source_script("1.0.0"));
+    }
+
+    #[test]
+    fn rejects_invalid_unchanged_duplicate_and_missing_source_updates() {
+        let mut sources = Vec::new();
+        let imported = prepare_source_import(&mut sources, source_script("1.0.0"), false)
+            .expect("source import");
+        prepare_source_import(&mut sources, source_script("2.0.0"), false)
+            .expect("another source import");
+
+        for script in [
+            "<html>下载页面</html>".to_string(),
+            source_script("1.0.0"),
+            source_script("2.0.0"),
+        ] {
+            assert!(prepare_source_update(&sources, &imported.source.id, script).is_err());
+            assert_eq!(sources[0].script, source_script("1.0.0"));
+        }
+        assert!(prepare_source_update(&sources, "missing", source_script("3.0.0")).is_err());
+    }
+
+    #[test]
+    fn updates_an_existing_source_when_the_store_is_full() {
+        let mut sources = Vec::new();
+        for index in 0..MAX_SOURCES {
+            prepare_source_import(&mut sources, source_script(&index.to_string()), false)
+                .expect("source import");
+        }
+
+        let updated = prepare_source_update(&sources, &sources[0].id, source_script("next"))
+            .expect("update at source limit");
+
+        assert_eq!(updated.id, sources[0].id);
+        assert_eq!(updated.version, "next");
+        assert_eq!(sources.len(), MAX_SOURCES);
+    }
 
     #[test]
     fn parses_lx_source_header() {

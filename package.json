@@ -1,7 +1,7 @@
 {
   "name": "one-player",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "A desktop music player with LX-compatible custom sources, local libraries, and WALKMAN management",
   "license": "MIT",
   "repository": {
@@ -25,6 +25,8 @@
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "buffer": "^6.0.3",
     "lucide-react": "^0.468.0",
     "node-forge": "^1.3.1",
@@ -44,4 +46,3 @@
     "vite": "^6.0.5"
   }
 }
-
