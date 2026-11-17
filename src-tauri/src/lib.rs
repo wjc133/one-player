@@ -1,6 +1,7 @@
 mod audio_tags;
 mod cover_art;
 mod cover_cache;
+mod desktop;
 mod downloads;
 mod lx_import;
 mod network;
@@ -25,7 +26,16 @@ pub fn run() {
             source_store_lock: Mutex::new(()),
         })
         .manage(cover_cache::CoverCache::default())
+        .manage(desktop::DesktopState::default())
+        .setup(|app| {
+            desktop::setup(app)?;
+            Ok(())
+        })
+        .on_window_event(desktop::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            desktop::set_desktop_close_behavior,
+            desktop::complete_window_close,
+            desktop::update_desktop_playback,
             lx_import::detect_lx_music_source,
             lx_import::import_lx_music_default_source,
             source_store::list_custom_sources,
@@ -57,6 +67,16 @@ pub fn run() {
             downloads::get_local_music_file_url,
             downloads::inspect_local_music_files,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running One Player");
+        .build(tauri::generate_context!())
+        .expect("error while building One Player")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Err(error) = desktop::show_main_window(app) {
+                    eprintln!("显示窗口失败：{error}");
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

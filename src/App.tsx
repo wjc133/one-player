@@ -28,6 +28,7 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Subtitles,
   Trash2,
   Upload,
   Volume2,
@@ -44,6 +45,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
@@ -52,6 +54,7 @@ import type {
   AlbumDetail,
   AlbumSummary,
   AppSettings,
+  CloseBehavior,
   CustomSourceInfo,
   DownloadedAudio,
   DownloadProgress,
@@ -83,11 +86,15 @@ import { updateSourceFromUrl } from './lib/sourceUpdater'
 import { WalkmanPage } from './components/WalkmanPage'
 import { AppUpdateConfirmation, AppUpdatePanel } from './components/AppUpdatePanel'
 import { useAppUpdater } from './lib/useAppUpdater'
+import { useDesktopIntegration } from './lib/useDesktopIntegration'
+import { getActiveLyricIndex, seekAudio } from './lib/playback'
+import { CloseChoiceDialog } from './components/CloseChoiceDialog'
 import { mergeImportedPlaylists } from './lib/playlistImport'
 import { LibraryNavigation } from './components/LibraryNavigation'
 import { PlaylistImportModal } from './components/PlaylistImportModal'
 import { CachedCover, CoverCacheProvider, useCoverUrl } from './components/CachedCover'
 import { resolveCoverUrl } from './lib/coverCache'
+import { getStorageWarning, localStore, subscribeStorageWarning } from './lib/storage'
 import {
   deleteDownload,
   detectLxMusicSource,
@@ -140,7 +147,7 @@ const isPlaybackMode = (value: unknown): value is PlaybackMode =>
   playbackModes.some((mode) => mode.value === value)
 
 const loadPlaybackMode = (): PlaybackMode => {
-  const value = localStorage.getItem(PLAYBACK_MODE_STORAGE_KEY)
+  const value = localStore.getItem(PLAYBACK_MODE_STORAGE_KEY)
   return isPlaybackMode(value) ? value : 'sequence'
 }
 
@@ -150,6 +157,10 @@ interface LyricLine {
   translation?: string
 }
 
+const MIN_LYRIC_FONT_SCALE = 80
+const MAX_LYRIC_FONT_SCALE = 150
+const LYRIC_FONT_SCALE_STEP = 10
+
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   playQuality: '320k',
@@ -157,6 +168,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   downloadAlbumsOnFavorite: false,
   overwriteExistingTags: true,
   autoCheckUpdates: true,
+  closeBehavior: 'ask',
+  menuBarLyrics: false,
+  lyricFontScale: 100,
   proxy: '',
 }
 
@@ -171,17 +185,33 @@ const qualityOrder: Quality[] = ['128k', '320k', 'flac', 'flac24bit']
 
 const loadJson = <T,>(key: string, fallback: T): T => {
   try {
-    const raw = localStorage.getItem(key)
+    const raw = localStore.getItem(key)
     return raw ? (JSON.parse(raw) as T) : fallback
   } catch {
     return fallback
   }
 }
 
-const loadSettings = (): AppSettings => ({
-  ...DEFAULT_SETTINGS,
-  ...loadJson<Partial<AppSettings>>('one-player:settings', {}),
-})
+const loadSettings = (): AppSettings => {
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    ...loadJson<Partial<AppSettings>>('one-player:settings', {}),
+  }
+  if (!['ask', 'quit', 'tray'].includes(settings.closeBehavior)) {
+    settings.closeBehavior = 'ask'
+  }
+  settings.lyricFontScale =
+    typeof settings.lyricFontScale === 'number' && Number.isFinite(settings.lyricFontScale)
+      ? Math.min(
+          MAX_LYRIC_FONT_SCALE,
+          Math.max(
+            MIN_LYRIC_FONT_SCALE,
+            Math.round(settings.lyricFontScale / LYRIC_FONT_SCALE_STEP) * LYRIC_FONT_SCALE_STEP,
+          ),
+        )
+      : DEFAULT_SETTINGS.lyricFontScale
+  return settings
+}
 
 const loadPlaylists = (): PlayList[] => {
   const playlists = loadJson<PlayList[] | null>('one-player:playlists', null)
@@ -413,6 +443,7 @@ const trackAlbumSummary = (track: MusicTrack): AlbumSummary | null => {
 }
 
 function App() {
+  const storageWarning = useSyncExternalStore(subscribeStorageWarning, getStorageWarning)
   const [view, setView] = useState<View>('search')
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
   const appUpdate = useAppUpdater(settings)
@@ -420,7 +451,7 @@ function App() {
   const settingsRef = useRef(settings)
   const [sources, setSources] = useState<CustomSourceInfo[]>([])
   const [activeSourceId, setActiveSourceId] = useState(
-    () => localStorage.getItem('one-player:active-source') ?? '',
+    () => localStore.getItem('one-player:active-source') ?? '',
   )
   const [sourceStatus, setSourceStatus] = useState<SourceStatus>({
     state: 'idle',
@@ -674,14 +705,10 @@ function App() {
   const sourceUpdateBusyRef = useRef(false)
 
   const lyricLines = useMemo(() => parseLrc(lyrics), [lyrics])
-  const activeLyricIndex = useMemo(() => {
-    let active = -1
-    for (let index = 0; index < lyricLines.length; index += 1) {
-      if (lyricLines[index].time <= currentTime + 0.12) active = index
-      else break
-    }
-    return active
-  }, [currentTime, lyricLines])
+  const activeLyricIndex = useMemo(
+    () => getActiveLyricIndex(lyricLines, currentTime),
+    [currentTime, lyricLines],
+  )
 
   const activeSource = sources.find((source) => source.id === activeSourceId)
   const showingFavoriteAlbums = activePlaylistId === ALBUM_COLLECTION_ID
@@ -722,7 +749,7 @@ function App() {
 
   useEffect(() => {
     settingsRef.current = settings
-    localStorage.setItem('one-player:settings', JSON.stringify(settings))
+    localStore.setItem('one-player:settings', JSON.stringify(settings))
   }, [settings])
 
   useEffect(() => {
@@ -730,7 +757,7 @@ function App() {
   }, [queue])
 
   useEffect(() => {
-    localStorage.setItem(PLAYBACK_MODE_STORAGE_KEY, playbackMode)
+    localStore.setItem(PLAYBACK_MODE_STORAGE_KEY, playbackMode)
   }, [playbackMode])
 
   function persistPlaylists(next: PlayList[]) {
@@ -750,8 +777,8 @@ function App() {
         await persistPlaylists(playlistsRef.current)
       }
       if (!active) return
-      localStorage.removeItem('one-player:playlists')
-      localStorage.removeItem('one-player:favorites')
+      localStore.removeItem('one-player:playlists')
+      localStore.removeItem('one-player:favorites')
       setPlaylistStorageReady(true)
     }).catch((error) => {
       if (active) setPlaylistStorageError(String(error))
@@ -805,7 +832,7 @@ function App() {
   }, [playlistStorageReady])
 
   useEffect(() => {
-    localStorage.setItem(
+    localStore.setItem(
       FAVORITE_ALBUMS_STORAGE_KEY,
       JSON.stringify(favoriteAlbums),
     )
@@ -897,7 +924,7 @@ function App() {
           failedCount += 1
         }
       }
-      localStorage.removeItem('one-player:downloads')
+      localStore.removeItem('one-player:downloads')
       if (failedCount) {
         showToast(`${failedCount} 个历史下载文件标记失败`)
       }
@@ -917,8 +944,14 @@ function App() {
     }
     applyTheme()
     const media = window.matchMedia('(prefers-color-scheme: light)')
-    media.addEventListener('change', applyTheme)
-    return () => media.removeEventListener('change', applyTheme)
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', applyTheme)
+      return () => media.removeEventListener('change', applyTheme)
+    }
+    if (typeof media.addListener === 'function') {
+      media.addListener(applyTheme)
+      return () => media.removeListener(applyTheme)
+    }
   }, [settings.theme])
 
   useEffect(() => {
@@ -940,18 +973,12 @@ function App() {
   }, [audioUrl])
 
   useEffect(() => {
-    document
-      .querySelector(`[data-lyric-index="${activeLyricIndex}"]`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [activeLyricIndex])
-
-  useEffect(() => {
     let cancelled = false
     void listCustomSources()
       .then(async (list) => {
         if (cancelled) return
         setSources(list)
-        const saved = localStorage.getItem('one-player:active-source') ?? ''
+        const saved = localStore.getItem('one-player:active-source') ?? ''
         const selected = list.some((source) => source.id === saved)
           ? saved
           : list[0]?.id ?? ''
@@ -1003,7 +1030,7 @@ function App() {
     runtimeRef.current?.dispose()
     runtimeRef.current = null
     setActiveSourceId(id)
-    localStorage.setItem('one-player:active-source', id)
+    localStore.setItem('one-player:active-source', id)
     if (!id) {
       setSourceStatus({ state: 'idle', capabilities: {} })
       return
@@ -1399,7 +1426,11 @@ function App() {
     } = {},
   ) {
     cancelPlaybackFade()
-    if (audioRef.current) audioRef.current.volume = volumeRef.current
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.volume = volumeRef.current
+    }
+    setIsPlaying(false)
     const sourceQueue = list.length ? list : [track]
     const canonicalQueue =
       playbackMode === 'random' &&
@@ -1545,9 +1576,18 @@ function App() {
   }
 
   function seekTo(value: number) {
-    if (!audioRef.current) return
-    audioRef.current.currentTime = value
-    setCurrentTime(value)
+    const audio = audioRef.current
+    if (!audio) return
+    try {
+      seekAudio(audio, value)
+    } catch (error) {
+      showToast(`跳转失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  function syncPlaybackPosition(audio: HTMLAudioElement) {
+    if (!audio.seeking) setCurrentTime(audio.currentTime)
+    setDuration(Number.isFinite(audio.duration) ? audio.duration : 0)
   }
 
   function createPlaylist(rawName: string, track?: MusicTrack) {
@@ -2137,6 +2177,27 @@ function App() {
     albumDownloadsInProgress.size > 0 ||
     downloadTasks.some((task) => task.status === 'downloading')
 
+  const desktop = useDesktopIntegration({
+    settings,
+    setSettings,
+    track: currentTrack ? `${currentTrack.name} · ${currentTrack.singer}` : null,
+    isPlaying,
+    playerPageOpen: playerOpen,
+    lyric: lyricLines[activeLyricIndex]?.text ?? '',
+    onToggle: togglePlayback,
+    onPrevious: () => playAdjacent(-1, 'manual'),
+    onNext: () => playAdjacent(1, 'manual'),
+    onSettings: () => {
+      closePlayerPage()
+      setView('settings')
+    },
+    onError: showToast,
+  })
+
+  const toggleMenuBarLyrics = () => {
+    setSettings((current) => ({ ...current, menuBarLyrics: !current.menuBarLyrics }))
+  }
+
   const navItems: Array<{ id: View; label: string; icon: typeof Search }> = [
     { id: 'search', label: '搜索', icon: Search },
     { id: 'library', label: '我的列表', icon: Library },
@@ -2155,9 +2216,14 @@ function App() {
         src={audioUrl}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-        onDurationChange={(event) => setDuration(event.currentTarget.duration || 0)}
-        onEnded={() => playAdjacent(1, 'ended')}
+        onTimeUpdate={(event) => syncPlaybackPosition(event.currentTarget)}
+        onSeeked={(event) => syncPlaybackPosition(event.currentTarget)}
+        onLoadedMetadata={(event) => syncPlaybackPosition(event.currentTarget)}
+        onDurationChange={(event) => syncPlaybackPosition(event.currentTarget)}
+        onEnded={() => {
+          setIsPlaying(false)
+          playAdjacent(1, 'ended')
+        }}
       />
 
       <div
@@ -2292,6 +2358,7 @@ function App() {
           ref={contentScrollRef}
           className={`content-scroll ${view === 'library' ? 'library-content-scroll' : ''}`}
         >
+          {storageWarning && <p className="storage-warning" role="alert">{storageWarning}</p>}
           {view === 'search' && (
             <SearchView
               query={query}
@@ -2544,6 +2611,8 @@ function App() {
         playbackMode={playbackMode}
         onPlaybackMode={cyclePlaybackMode}
         onQueue={() => setQueueOpen(true)}
+        menuBarLyrics={settings.menuBarLyrics}
+        onMenuBarLyrics={toggleMenuBarLyrics}
         onSeek={seekTo}
         onOpen={openPlayerPage}
       />
@@ -2563,6 +2632,16 @@ function App() {
           activeLyricIndex={activeLyricIndex}
           lyricsLoading={lyricsLoading}
           lyricsError={lyricsError}
+          lyricFontScale={settings.lyricFontScale}
+          onLyricFontScaleChange={(lyricFontScale) =>
+            setSettings((current) => ({
+              ...current,
+              lyricFontScale: Math.min(
+                MAX_LYRIC_FONT_SCALE,
+                Math.max(MIN_LYRIC_FONT_SCALE, lyricFontScale),
+              ),
+            }))
+          }
           isFavorite={currentTrackFavorited}
           downloadState={getTrackDownloadState(currentTrack)}
           onDownload={() => requestTrackDownload(currentTrack)}
@@ -2573,6 +2652,8 @@ function App() {
           playbackMode={playbackMode}
           onPlaybackMode={cyclePlaybackMode}
           onQueue={() => setQueueOpen(true)}
+          menuBarLyrics={settings.menuBarLyrics}
+          onMenuBarLyrics={toggleMenuBarLyrics}
           onSeek={seekTo}
           onOpenAlbum={() => {
             closePlayerPage()
@@ -2592,6 +2673,14 @@ function App() {
             void playTrack(track, queue.length ? queue : [currentTrack])
           }
           onClose={() => setQueueOpen(false)}
+        />
+      )}
+
+      {desktop.closeDialogOpen && (
+        <CloseChoiceDialog
+          busy={desktop.closing}
+          onCancel={desktop.cancelClose}
+          onConfirm={(behavior, remember) => void desktop.confirmClose(behavior, remember)}
         />
       )}
 
@@ -3561,7 +3650,7 @@ function SettingsView(props: SettingsViewProps) {
           </div>
           <SettingRow label="主题">
             <div className="segmented">
-              {(['dark', 'light', 'system'] as const).map((theme) => (
+              {(['dark', 'light', 'purple', 'system'] as const).map((theme) => (
                 <button
                   key={theme}
                   className={props.settings.theme === theme ? 'active' : ''}
@@ -3569,7 +3658,7 @@ function SettingsView(props: SettingsViewProps) {
                     props.setSettings((current) => ({ ...current, theme }))
                   }
                 >
-                  {theme === 'dark' ? '深色' : theme === 'light' ? '浅色' : '跟随系统'}
+                  {theme === 'dark' ? '深色' : theme === 'light' ? '浅色' : theme === 'purple' ? '紫色' : '跟随系统'}
                 </button>
               ))}
             </div>
@@ -3590,6 +3679,44 @@ function SettingsView(props: SettingsViewProps) {
                 </option>
               ))}
             </select>
+          </SettingRow>
+          <SettingRow
+            label="点击关闭按钮时"
+            description="隐藏到菜单栏后继续播放，可通过顶部音乐图标恢复窗口"
+          >
+            <select
+              aria-label="点击关闭按钮时"
+              value={props.settings.closeBehavior}
+              onChange={(event) =>
+                props.setSettings((current) => ({
+                  ...current,
+                  closeBehavior: event.target.value as CloseBehavior,
+                }))
+              }
+            >
+              <option value="ask">每次询问</option>
+              <option value="tray">隐藏到菜单栏</option>
+              <option value="quit">退出应用</option>
+            </select>
+          </SettingRow>
+          <SettingRow
+            label="菜单栏歌词"
+            description="在 macOS 顶部菜单栏显示当前一句歌词，也可从播放列表右侧切换"
+          >
+            <label className="switch" title="在菜单栏显示当前一句歌词">
+              <input
+                type="checkbox"
+                aria-label="菜单栏歌词"
+                checked={props.settings.menuBarLyrics}
+                onChange={(event) =>
+                  props.setSettings((current) => ({
+                    ...current,
+                    menuBarLyrics: event.target.checked,
+                  }))
+                }
+              />
+              <span />
+            </label>
           </SettingRow>
           <SettingRow
             label="下载目录"
@@ -4024,6 +4151,8 @@ interface PlayerBarProps {
   playbackMode: PlaybackMode
   onPlaybackMode: () => void
   onQueue: () => void
+  menuBarLyrics: boolean
+  onMenuBarLyrics: () => void
   onSeek: (value: number) => void
   onOpen: () => void
 }
@@ -4083,6 +4212,25 @@ function PlaybackModeButton({
       title={modeInfo?.label ?? '顺序播放'}
     >
       <Icon size={size} />
+    </button>
+  )
+}
+
+function MenuBarLyricsButton(props: {
+  enabled: boolean
+  size: number
+  onToggle: () => void
+}) {
+  const label = `${props.enabled ? '关闭' : '开启'}菜单栏歌词`
+  return (
+    <button
+      className={`menu-bar-lyrics-control ${props.enabled ? 'active' : ''}`}
+      onClick={props.onToggle}
+      aria-label={label}
+      aria-pressed={props.enabled}
+      title={label}
+    >
+      <Subtitles size={props.size} />
     </button>
   )
 }
@@ -4196,9 +4344,11 @@ function PlayerBar(props: PlayerBarProps) {
           value={props.volume}
           onChange={(event) => props.onVolume(Number(event.target.value))}
         />
-        <button onClick={props.onOpen} disabled={!props.track} aria-label="打开播放页">
-          <Maximize2 size={18} />
-        </button>
+        <MenuBarLyricsButton
+          enabled={props.menuBarLyrics}
+          size={19}
+          onToggle={props.onMenuBarLyrics}
+        />
       </div>
     </footer>
   )
@@ -4218,6 +4368,8 @@ interface PlayerPageProps {
   activeLyricIndex: number
   lyricsLoading: boolean
   lyricsError: string
+  lyricFontScale: number
+  onLyricFontScaleChange: (value: number) => void
   isFavorite: boolean
   downloadState: TrackDownloadState
   onDownload: () => void
@@ -4228,6 +4380,8 @@ interface PlayerPageProps {
   playbackMode: PlaybackMode
   onPlaybackMode: () => void
   onQueue: () => void
+  menuBarLyrics: boolean
+  onMenuBarLyrics: () => void
   onSeek: (value: number) => void
   onOpenAlbum: () => void
   onClosed: () => void
@@ -4235,6 +4389,7 @@ interface PlayerPageProps {
 
 function PlayerPage(props: PlayerPageProps) {
   const { src: cachedArtwork } = useCoverUrl(props.artwork, props.open)
+  const lyricsScrollRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState(() => ({
     width: document.documentElement.clientWidth,
     height: document.documentElement.clientHeight,
@@ -4263,6 +4418,27 @@ function PlayerPage(props: PlayerPageProps) {
     }
   }, [])
 
+  useEffect(() => {
+    if (!props.open) return
+    const container = lyricsScrollRef.current
+    const activeLine = container?.querySelector<HTMLButtonElement>(
+      `[data-lyric-index="${props.activeLyricIndex}"]`,
+    )
+    if (container && activeLine) {
+      container.scrollTo({
+        top: activeLine.offsetTop - (container.clientHeight - activeLine.offsetHeight) / 2,
+        behavior: 'smooth',
+      })
+    }
+  }, [
+    props.activeLyricIndex,
+    props.lyricFontScale,
+    props.lyricLines,
+    props.open,
+    viewport.width,
+    viewport.height,
+  ])
+
   const coverSize = Math.floor(
     Math.max(
       140,
@@ -4270,8 +4446,8 @@ function PlayerPage(props: PlayerPageProps) {
     ),
   )
   const artworkBackground = cachedArtwork
-    ? `linear-gradient(100deg, rgba(7, 10, 13, 0.94), rgba(10, 13, 17, 0.86)), radial-gradient(circle at 18% 30%, rgba(134, 239, 98, 0.08), transparent 35%), url("${cachedArtwork.replaceAll('"', '\\"')}")`
-    : 'radial-gradient(circle at 18% 30%, rgba(134, 239, 98, 0.08), transparent 35%), linear-gradient(100deg, #070a0d, #0a0d11)'
+    ? `linear-gradient(100deg, var(--player-gradient-start), var(--player-gradient-end)), radial-gradient(circle at 18% 30%, var(--player-glow), transparent 35%), url("${cachedArtwork.replaceAll('"', '\\"')}")`
+    : 'radial-gradient(circle at 18% 30%, var(--player-glow), transparent 35%), linear-gradient(100deg, var(--player-gradient-start), var(--player-bg))'
 
   return (
     <div
@@ -4390,12 +4566,46 @@ function PlayerPage(props: PlayerPageProps) {
             </button>
           </div>
         </section>
-        <section className="lyrics-panel">
+        <section
+          className="lyrics-panel"
+          style={{ '--lyric-font-scale': props.lyricFontScale / 100 } as CSSProperties}
+        >
           <div className="lyrics-heading">
             <span>歌词</span>
-            <small>随播放进度自动滚动</small>
+            <div className="lyrics-font-controls" role="group" aria-label="歌词显示设置">
+              <button
+                type="button"
+                aria-label="缩小歌词字号"
+                title="缩小歌词字号"
+                disabled={props.lyricFontScale <= MIN_LYRIC_FONT_SCALE}
+                onClick={() =>
+                  props.onLyricFontScaleChange(props.lyricFontScale - LYRIC_FONT_SCALE_STEP)
+                }
+              >
+                A−
+              </button>
+              <span className="lyrics-font-value" aria-live="polite">
+                {props.lyricFontScale}%
+              </span>
+              <button
+                type="button"
+                aria-label="放大歌词字号"
+                title="放大歌词字号"
+                disabled={props.lyricFontScale >= MAX_LYRIC_FONT_SCALE}
+                onClick={() =>
+                  props.onLyricFontScaleChange(props.lyricFontScale + LYRIC_FONT_SCALE_STEP)
+                }
+              >
+                A＋
+              </button>
+              <MenuBarLyricsButton
+                enabled={props.menuBarLyrics}
+                size={18}
+                onToggle={props.onMenuBarLyrics}
+              />
+            </div>
           </div>
-          <div className="lyrics-scroll">
+          <div className="lyrics-scroll" ref={lyricsScrollRef}>
             {props.lyricsLoading ? (
               <div className="lyrics-empty">
                 <LoaderCircle className="spin" size={25} />

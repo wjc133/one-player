@@ -151,6 +151,13 @@
   --accent: #86ef62;
   --accent-strong: #68d846;
   --accent-soft: rgba(134, 239, 98, 0.13);
+  --accent-glow: rgba(134, 239, 98, 0.075);
+  --on-accent: #071004;
+  --player-bg: #0a0d11;
+  --player-gradient-start: rgba(7, 10, 13, 0.94);
+  --player-gradient-end: rgba(10, 13, 17, 0.86);
+  --player-glow: rgba(134, 239, 98, 0.08);
+  --play-button-shadow: rgba(104, 216, 70, 0.25);
   --danger: #fb7185;
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
   --player-height: 92px;
@@ -177,6 +184,32 @@
   --shadow: 0 24px 70px rgba(25, 34, 45, 0.13);
 }
 
+:root[data-theme='purple'] {
+  color: #f1eafa;
+  background: #100c1a;
+  --bg: #100c1a;
+  --sidebar: #171120;
+  --panel: #1e172b;
+  --panel-strong: #281e39;
+  --panel-soft: #191222;
+  --border: rgba(210, 182, 255, 0.09);
+  --border-strong: rgba(210, 182, 255, 0.17);
+  --text: #f1eafa;
+  --muted: #aa9cbd;
+  --subtle: #7c6c96;
+  --accent: #c49bff;
+  --accent-strong: #ac7aef;
+  --accent-soft: rgba(196, 155, 255, 0.14);
+  --accent-glow: rgba(196, 155, 255, 0.08);
+  --on-accent: #1c0d30;
+  --player-bg: #130d20;
+  --player-gradient-start: rgba(17, 10, 29, 0.95);
+  --player-gradient-end: rgba(24, 15, 40, 0.87);
+  --player-glow: rgba(196, 155, 255, 0.13);
+  --play-button-shadow: rgba(160, 100, 235, 0.3);
+  --shadow: 0 24px 70px rgba(8, 2, 18, 0.4);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -194,7 +227,7 @@ body,
 :root.player-page-open,
 :root.player-page-open body,
 :root.player-page-open #root {
-  background-color: #0a0d11;
+  background-color: var(--player-bg);
 }
 
 button,
@@ -222,6 +255,17 @@ select:focus-visible {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.storage-warning {
+  margin: 16px 28px;
+  padding: 12px 16px;
+  border: 1px solid #b58032;
+  border-radius: 8px;
+  color: #dca952;
+  background: var(--panel);
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .app-shell {
@@ -330,7 +374,7 @@ button:disabled {
   place-items: center;
   width: 39px;
   height: 39px;
-  color: #071004;
+  color: var(--on-accent);
   border-radius: 12px;
   background:
     linear-gradient(145deg, #b5ff8d, #6ae049 65%, #47bc2a);
@@ -425,7 +469,7 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 14px;
   background:
-    linear-gradient(150deg, rgba(134, 239, 98, 0.055), transparent 52%),
+    linear-gradient(150deg, var(--accent-glow), transparent 52%),
     var(--panel-soft);
 }
 
@@ -608,7 +652,7 @@ button:disabled {
   border-bottom: 1px solid var(--border);
   background:
     color-mix(in srgb, var(--bg) 92%, transparent),
-    linear-gradient(115deg, rgba(134, 239, 98, 0.075), transparent 40%),
+    linear-gradient(115deg, var(--accent-glow), transparent 40%),
     linear-gradient(190deg, rgba(105, 124, 160, 0.05), transparent 50%);
   backdrop-filter: blur(20px);
   transition:
@@ -739,7 +783,7 @@ button:disabled {
   min-width: 78px;
   height: 42px;
   padding: 0 17px;
-  color: #071004;
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 800;
   border: 0;
@@ -1256,7 +1300,7 @@ button.track-album:disabled {
   inset: auto -25% -65% 20%;
   height: 100%;
   border-radius: 50%;
-  background: rgba(134, 239, 98, 0.17);
+  background: var(--accent-soft);
   filter: blur(8px);
 }
 
@@ -1540,7 +1584,7 @@ button.track-album:disabled {
 .empty-state button {
   margin-top: 18px;
   padding: 8px 13px;
-  color: #071004;
+  color: var(--on-accent);
   font-size: 11px;
   font-weight: 800;
   border: 0;
@@ -2190,7 +2234,7 @@ button.track-album:disabled {
   justify-content: center;
   padding: 0 11px;
   gap: 6px;
-  color: #071004;
+  color: var(--on-accent);
   font-size: 9px;
   font-weight: 750;
   border: 0;
@@ -2256,7 +2300,7 @@ button.track-album:disabled {
   display: grid;
   place-items: center;
   width: 38px;
-  color: #071004;
+  color: var(--on-accent);
   border: 0;
   border-radius: 0 8px 8px 0;
   background: var(--accent);
@@ -2536,7 +2580,8 @@ button.track-album:disabled {
 }
 
 .player-controls button,
-.player-page-controls button {
+.player-page-controls button,
+.player-extras button {
   display: grid;
   place-items: center;
   width: 34px;
@@ -2550,7 +2595,8 @@ button.track-album:disabled {
 }
 
 .player-controls button:hover,
-.player-page-controls button:hover {
+.player-page-controls button:hover,
+.player-extras button:hover {
   color: var(--text);
 }
 
@@ -2564,7 +2610,8 @@ button.track-album:disabled {
 .player-controls .download-control.done,
 .player-page-controls .download-control.done,
 .player-controls .playback-mode-control.active,
-.player-page-controls .playback-mode-control.active {
+.player-page-controls .playback-mode-control.active,
+.menu-bar-lyrics-control.active {
   color: var(--accent);
 }
 
@@ -2581,7 +2628,7 @@ button.track-album:disabled {
 .player-controls .play-button {
   width: 39px;
   height: 39px;
-  color: #071004;
+  color: var(--on-accent);
   background: var(--accent);
 }
 
@@ -2625,7 +2672,7 @@ input[type='range'] {
   overflow: hidden;
   opacity: 0;
   color: #f5f7f8;
-  background-color: #0a0d11;
+  background-color: var(--player-bg);
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;
@@ -2655,7 +2702,7 @@ input[type='range'] {
   right: 0;
   left: 0;
   height: 52px;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .player-page-content {
@@ -2758,23 +2805,27 @@ input[type='range'] {
 
 .player-page-controls {
   display: flex;
+  width: 100%;
+  max-width: 470px;
   align-items: center;
+  justify-content: space-between;
   margin-top: 21px;
-  gap: 18px;
+  gap: 4px;
 }
 
 .player-page-controls button {
-  width: 42px;
-  height: 42px;
+  flex-shrink: 0;
+  width: clamp(30px, 3.4vw, 42px);
+  height: clamp(30px, 3.4vw, 42px);
   color: rgba(255, 255, 255, 0.72);
 }
 
 .player-page-controls .hero-play-button {
-  width: 58px;
-  height: 58px;
-  color: #091006;
+  width: clamp(46px, 4.8vw, 58px);
+  height: clamp(46px, 4.8vw, 58px);
+  color: var(--on-accent);
   background: var(--accent);
-  box-shadow: 0 12px 35px rgba(104, 216, 70, 0.25);
+  box-shadow: 0 12px 35px var(--play-button-shadow);
 }
 
 .queue-backdrop {
@@ -2915,6 +2966,7 @@ input[type='range'] {
 }
 
 .lyrics-panel {
+  --lyric-font-size: clamp(16px, 2vw, 24px);
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -2923,9 +2975,10 @@ input[type='range'] {
 
 .lyrics-heading {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   min-height: 36px;
   padding: 0 8px 17px;
+  gap: 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -2934,16 +2987,54 @@ input[type='range'] {
   font-weight: 700;
 }
 
-.lyrics-heading small {
-  overflow: hidden;
-  max-width: calc(100% - 205px);
-  margin-right: 155px;
+.lyrics-font-controls {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
   margin-left: auto;
-  color: rgba(255, 255, 255, 0.35);
-  font-size: 9px;
-  text-align: right;
-  text-overflow: ellipsis;
+}
+
+.lyrics-font-controls button {
+  display: inline-flex;
+  width: 30px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
   white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lyrics-font-controls button:hover:not(:disabled) {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.lyrics-font-controls .menu-bar-lyrics-control {
+  margin-left: 6px;
+  cursor: pointer;
+}
+
+.lyrics-font-controls .menu-bar-lyrics-control.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-soft);
+}
+
+.lyrics-font-value {
+  min-width: 34px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .lyrics-scroll {
@@ -2987,17 +3078,19 @@ input[type='range'] {
 
 .lyric-line > span {
   display: block;
-  font-size: clamp(16px, 2vw, 24px);
+  font-size: calc(var(--lyric-font-size) * var(--lyric-font-scale));
   font-weight: 600;
   line-height: 1.45;
   letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
 }
 
 .lyric-line small {
   display: block;
   margin-top: 5px;
   color: rgba(255, 255, 255, 0.24);
-  font-size: 11px;
+  font-size: calc(11px * var(--lyric-font-scale));
+  overflow-wrap: anywhere;
 }
 
 .lyric-line.active {
@@ -3006,6 +3099,7 @@ input[type='range'] {
 }
 
 .lyric-line.active > span {
+  font-size: calc(var(--lyric-font-size) * var(--lyric-font-scale) * 1.18);
   text-shadow: 0 0 35px rgba(255, 255, 255, 0.12);
 }
 
@@ -3078,6 +3172,55 @@ input[type='range'] {
   border-radius: 8px;
   background: transparent;
   cursor: pointer;
+}
+
+.close-choice-backdrop {
+  z-index: 150;
+}
+
+.close-choice-modal {
+  width: min(480px, 100%);
+  outline: none;
+}
+
+.close-choice-modal h2 {
+  margin: 20px 0 10px;
+  font-size: 22px;
+}
+
+.close-choice-modal > p {
+  font-size: 13px;
+}
+
+.close-choice-remember {
+  display: flex;
+  align-items: flex-start;
+  margin: 24px 0;
+  gap: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.close-choice-remember input {
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.close-choice-remember small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.close-choice-modal .modal-actions {
+  flex-wrap: wrap;
+}
+
+.close-choice-modal .modal-actions button {
+  font-size: 12px;
 }
 
 .modal-icon {
@@ -3284,7 +3427,7 @@ input[type='range'] {
   gap: 6px;
   height: 36px;
   padding: 0 12px;
-  color: #071004;
+  color: var(--on-accent);
   font-size: 11px;
   font-weight: 700;
   border: 0;
@@ -3447,10 +3590,12 @@ input[type='range'] {
   }
 
   .player-bar {
-    grid-template-columns: minmax(190px, 0.7fr) minmax(330px, 1.3fr);
+    grid-template-columns: minmax(180px, 0.7fr) minmax(330px, 1.3fr) 34px;
+    gap: 18px;
   }
 
-  .player-extras {
+  .player-extras > svg,
+  .player-extras > input {
     display: none;
   }
 
@@ -3498,17 +3643,17 @@ input[type='range'] {
 
   .player-page-controls {
     margin-top: 12px;
-    gap: 14px;
+    gap: 3px;
   }
 
   .player-page-controls button {
-    width: 38px;
-    height: 38px;
+    width: 32px;
+    height: 32px;
   }
 
   .player-page-controls .hero-play-button {
-    width: 50px;
-    height: 50px;
+    width: 46px;
+    height: 46px;
   }
 
   .lyrics-scroll {
@@ -3606,10 +3751,6 @@ input[type='range'] {
 
   .player-page-toolbar {
     height: 48px;
-  }
-
-  .lyrics-heading small {
-    display: none;
   }
 
   .lyrics-heading {

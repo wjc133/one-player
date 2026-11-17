@@ -7,7 +7,66 @@
     <title>One Player</title>
   </head>
   <body>
+    <div id="startup-status" role="status" data-tauri-drag-region>
+      <style>
+        #startup-status { position: fixed; inset: 0; z-index: 2147483647; display: flex; align-items: center; justify-content: center; padding: 32px; box-sizing: border-box; color: #edf1f6; background: #0a0d11; font: 14px/1.7 system-ui, sans-serif; }
+        #startup-status[hidden] { display: none; }
+        #startup-status > section { width: 100%; max-width: 720px; }
+        #startup-status h1 { font-size: 24px; }
+        #startup-status p { color: #a7b0bf; }
+        #startup-status pre { max-height: 45vh; overflow: auto; padding: 16px; border: 1px solid #343b46; border-radius: 8px; color: #fda4af; background: #141820; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+        #startup-status button { padding: 10px 20px; border: 0; border-radius: 8px; color: #0a0d11; background: #86ef62; font: inherit; cursor: pointer; }
+      </style>
+      <section>
+        <h1 id="startup-title">正在启动 One Player…</h1>
+        <p id="startup-message">正在加载播放器界面。</p>
+        <pre id="startup-details" hidden></pre>
+        <button id="startup-retry" hidden>重新加载</button>
+      </section>
+    </div>
     <div id="root"></div>
+    <script>
+      ;(() => {
+        var ready = false
+        var failed = false
+        var status = document.getElementById('startup-status')
+        var title = document.getElementById('startup-title')
+        var message = document.getElementById('startup-message')
+        var details = document.getElementById('startup-details')
+        var retry = document.getElementById('startup-retry')
+        function fail(error) {
+          failed = true
+          status.hidden = false
+          status.setAttribute('role', 'alert')
+          title.textContent = 'One Player 未能启动'
+          message.textContent = '请将下方错误详情反馈给开发者，或重新加载后再试。'
+          var summary = error && error.message ? (error.name ? error.name + ': ' : '') + error.message : String(error)
+          details.textContent = summary + (error && error.stack ? '\n\n' + error.stack : '') + '\n\n' + navigator.userAgent
+          details.hidden = false
+          retry.hidden = false
+        }
+        window.__ONE_PLAYER_STARTUP__ = {
+          ready: function () {
+            if (failed) return
+            ready = true
+            status.hidden = true
+          },
+          fail: fail,
+        }
+        retry.addEventListener('click', function () { window.location.reload() })
+        window.addEventListener('error', function (event) {
+          if (ready) return
+          if (event.target && event.target.tagName === 'SCRIPT') {
+            fail('播放器脚本加载失败：' + event.target.src)
+          } else if (event.message) {
+            fail(event.error || event.message)
+          }
+        }, true)
+        window.addEventListener('unhandledrejection', function (event) {
+          if (!ready) fail(event.reason)
+        })
+      })()
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -217,13 +217,18 @@ export interface HttpResponsePayload {
   rawBase64: string
 }
 
+export type CloseBehavior = 'ask' | 'quit' | 'tray'
+
 export interface AppSettings {
-  theme: 'dark' | 'light' | 'system'
+  theme: 'dark' | 'light' | 'purple' | 'system'
   playQuality: Quality
   downloadDirectory: string
   downloadAlbumsOnFavorite: boolean
   overwriteExistingTags: boolean
   autoCheckUpdates: boolean
+  closeBehavior: CloseBehavior
+  menuBarLyrics: boolean
+  lyricFontScale: number
   proxy: string
 }
 

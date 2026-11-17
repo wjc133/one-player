@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
+  CloseBehavior,
   DownloadedAudio,
   DownloadMetadata,
   CustomSourceInfo,
@@ -16,6 +17,20 @@ import type {
   WalkmanLibrary,
   WalkmanTrack,
 } from '../types'
+
+export const setDesktopCloseBehavior = (behavior: CloseBehavior) =>
+  invoke<void>('set_desktop_close_behavior', { behavior })
+
+export const completeWindowClose = (behavior: Exclude<CloseBehavior, 'ask'>) =>
+  invoke<void>('complete_window_close', { behavior })
+
+export const updateDesktopPlayback = (payload: {
+  track: string | null
+  isPlaying: boolean
+  playerPageVisible: boolean
+  lyric: string
+  menuBarLyrics: boolean
+}) => invoke<void>('update_desktop_playback', { payload })
 
 export const listCustomSources = () =>
   invoke<CustomSourceInfo[]>('list_custom_sources')
