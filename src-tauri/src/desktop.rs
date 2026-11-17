@@ -136,7 +136,7 @@ pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
     #[cfg(not(target_os = "macos"))]
     let icon = app
         .default_window_icon()
-        .cloned()
+        .map(|icon| Image::new_owned(icon.rgba().to_vec(), icon.width(), icon.height()))
         .unwrap_or_else(music_icon);
 
     TrayIconBuilder::with_id(TRAY_ID)
