@@ -274,8 +274,21 @@ mod tests {
                             let reply = replies[index.min(replies.len() - 1)].clone();
                             handlers.push(thread::spawn(move || {
                                 socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-                                let mut request = [0; 4096];
-                                let _ = socket.read(&mut request);
+                                let mut request = Vec::new();
+                                let mut chunk = [0; 1024];
+                                loop {
+                                    let received = match socket.read(&mut chunk) {
+                                        Ok(0) | Err(_) => return,
+                                        Ok(received) => received,
+                                    };
+                                    request.extend_from_slice(&chunk[..received]);
+                                    if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                                        break;
+                                    }
+                                    if request.len() > 16 * 1024 {
+                                        return;
+                                    }
+                                }
                                 let _ = write!(
                                     socket,
                                     "HTTP/1.1 {} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
