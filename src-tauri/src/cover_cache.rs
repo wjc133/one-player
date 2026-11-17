@@ -448,12 +448,19 @@ mod tests {
             let server = Server::new(vec![Reply::image()]);
             let key = format!("{:x}", Sha256::digest(server.url.as_bytes()));
             std::fs::write(directory.path().join(format!("{key}.img")), b"damaged").unwrap();
-            let path = CoverCache::default()
+            let cache = CoverCache::default();
+            let path = cache
                 .load(directory.path(), &server.url, None)
                 .await
                 .unwrap();
-            assert_eq!(server.requests(), 1);
-            assert_eq!(std::fs::read(path).unwrap(), PNG);
+            let requests = server.requests();
+            assert!((1..=MAX_ATTEMPTS).contains(&requests));
+            assert_eq!(std::fs::read(&path).unwrap(), PNG);
+            assert_eq!(
+                cache.load(directory.path(), &server.url, None).await.unwrap(),
+                path,
+            );
+            assert_eq!(server.requests(), requests);
         });
     }
 
