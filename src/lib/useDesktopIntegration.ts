@@ -6,6 +6,7 @@ import { localStore } from './storage'
 import {
   completeWindowClose,
   setDesktopCloseBehavior,
+  setDesktopTrayVisible,
   updateDesktopPlayback,
 } from './tauri'
 
@@ -50,6 +51,7 @@ export function useDesktopIntegration(props: DesktopIntegrationProps) {
           case 'next': current.onNext(); break
           case 'settings': current.onSettings(); break
           case 'toggle-lyrics':
+            if (!current.settings.showMenuBarIcon) break
             current.setSettings((settings) => ({
               ...settings,
               menuBarLyrics: !settings.menuBarLyrics,
@@ -74,6 +76,13 @@ export function useDesktopIntegration(props: DesktopIntegrationProps) {
 
   useEffect(() => {
     if (!isTauri()) return
+    void setDesktopTrayVisible(props.settings.showMenuBarIcon).catch((error) => {
+      latest.current.onError(`更新菜单栏图标失败：${String(error)}`)
+    })
+  }, [props.settings.showMenuBarIcon])
+
+  useEffect(() => {
+    if (!isTauri()) return
     void setDesktopCloseBehavior(props.settings.closeBehavior).catch((error) => {
       latest.current.onError(`保存关闭行为失败：${String(error)}`)
     })
@@ -86,7 +95,7 @@ export function useDesktopIntegration(props: DesktopIntegrationProps) {
       isPlaying: props.isPlaying,
       playerPageVisible: props.playerPageOpen && windowVisible,
       lyric: props.lyric,
-      menuBarLyrics: props.settings.menuBarLyrics,
+      menuBarLyrics: props.settings.showMenuBarIcon && props.settings.menuBarLyrics,
     }).catch((error) => {
       latest.current.onError(`更新菜单栏失败：${String(error)}`)
     })
@@ -96,6 +105,7 @@ export function useDesktopIntegration(props: DesktopIntegrationProps) {
     props.playerPageOpen,
     props.lyric,
     props.settings.menuBarLyrics,
+    props.settings.showMenuBarIcon,
     windowVisible,
   ])
 

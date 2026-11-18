@@ -25,6 +25,8 @@ pub struct LxMusicSourceSummary {
     description: String,
     version: String,
     author: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -36,18 +38,29 @@ pub struct LxMusicSourceStatus {
     install_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     data_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    selected_source_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source: Option<LxMusicSourceSummary>,
+    sources: Vec<LxMusicSourceSummary>,
     message: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LxMusicImportResult {
+    sources: Vec<ImportedSource>,
+    failures: Vec<SourceImportFailure>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportedSource {
     source: CustomSourceInfo,
     already_imported: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SourceImportFailure {
+    id: String,
+    name: String,
+    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,7 +80,7 @@ struct LxStoredSource {
 
 struct LxInspection {
     status: LxMusicSourceStatus,
-    script: Option<String>,
+    scripts: Vec<(String, String)>,
 }
 
 fn path_text(path: &Path) -> String {
@@ -199,13 +212,10 @@ fn read_json(path: &Path, label: &str) -> Result<Value, String> {
     serde_json::from_slice(&raw).map_err(|error| format!("解析 LX {label}失败：{error}"))
 }
 
-fn selected_source_id(value: &Value) -> Option<String> {
-    let settings = value.get("setting").unwrap_or(value);
-    settings
-        .get("common.apiSource")
-        .or_else(|| settings.get("apiSource"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
+pub(crate) fn lx_user_data_path() -> Result<PathBuf, String> {
+    let install = find_install_path().ok_or_else(|| "未检测到 LX Music Desktop".to_string())?;
+    find_user_data_path(&install)
+        .ok_or_else(|| "尚未找到 LX Music 本地配置，请先启动 LX Music".to_string())
 }
 
 fn stored_sources(value: Value) -> Result<Vec<LxStoredSource>, String> {
@@ -246,8 +256,7 @@ fn unavailable_status(message: impl Into<String>) -> LxMusicSourceStatus {
         can_import: false,
         install_path: None,
         data_path: None,
-        selected_source_id: None,
-        source: None,
+        sources: Vec::new(),
         message: message.into(),
     }
 }
@@ -256,7 +265,7 @@ fn inspect_lx_music() -> LxInspection {
     let Some(install_path) = find_install_path() else {
         return LxInspection {
             status: unavailable_status("未检测到 LX Music Desktop，安装后可一键导入"),
-            script: None,
+            scripts: Vec::new(),
         };
     };
 
@@ -265,8 +274,7 @@ fn inspect_lx_music() -> LxInspection {
         can_import: false,
         install_path: Some(path_text(&install_path)),
         data_path: None,
-        selected_source_id: None,
-        source: None,
+        sources: Vec::new(),
         message: String::new(),
     };
 
@@ -274,53 +282,10 @@ fn inspect_lx_music() -> LxInspection {
         status.message = "已检测到 LX Music，但尚未找到本地配置；请先启动 LX Music".to_string();
         return LxInspection {
             status,
-            script: None,
+            scripts: Vec::new(),
         };
     };
     status.data_path = Some(path_text(&data_path));
-
-    let Some(settings_path) = find_existing_file(
-        &data_path,
-        &[
-            "LxDatas/config_v2.json",
-            "config_v2.json",
-            "config.json",
-            "LxDatas/config.json",
-        ],
-    ) else {
-        status.message = "未找到 LX 的设置文件；请先在 LX Music 中完成初始化".to_string();
-        return LxInspection {
-            status,
-            script: None,
-        };
-    };
-
-    let settings = match read_json(&settings_path, "设置") {
-        Ok(settings) => settings,
-        Err(message) => {
-            status.message = message;
-            return LxInspection {
-                status,
-                script: None,
-            };
-        }
-    };
-    let Some(selected_source_id) = selected_source_id(&settings) else {
-        status.message = "LX 设置中没有默认音源".to_string();
-        return LxInspection {
-            status,
-            script: None,
-        };
-    };
-    status.selected_source_id = Some(selected_source_id.clone());
-
-    if !selected_source_id.starts_with("user_api") {
-        status.message = "LX 当前默认音源不是自定义源，请先在 LX 中启用一个自定义源".to_string();
-        return LxInspection {
-            status,
-            script: None,
-        };
-    }
 
     let Some(sources_path) = find_existing_file(
         &data_path,
@@ -334,7 +299,7 @@ fn inspect_lx_music() -> LxInspection {
         status.message = "未找到 LX 的自定义源配置".to_string();
         return LxInspection {
             status,
-            script: None,
+            scripts: Vec::new(),
         };
     };
 
@@ -344,68 +309,58 @@ fn inspect_lx_music() -> LxInspection {
             status.message = message;
             return LxInspection {
                 status,
-                script: None,
+                scripts: Vec::new(),
             };
         }
     };
-    let Some(source) = sources
-        .into_iter()
-        .find(|source| source.id == selected_source_id)
-    else {
-        status.message = "LX 当前默认自定义源已不存在".to_string();
-        return LxInspection {
-            status,
-            script: None,
+    inspect_sources(status, sources)
+}
+
+fn inspect_sources(mut status: LxMusicSourceStatus, sources: Vec<LxStoredSource>) -> LxInspection {
+    let mut scripts = Vec::new();
+    for source in sources {
+        let mut summary = LxMusicSourceSummary {
+            id: source.id.clone(),
+            name: source.name,
+            description: source.description,
+            version: source.version,
+            author: source.author,
+            error: None,
         };
-    };
-
-    let script = match decode_lx_script(&source.script) {
-        Ok(script) => script,
-        Err(message) => {
-            status.message = message;
-            return LxInspection {
-                status,
-                script: None,
-            };
+        match decode_lx_script(&source.script).and_then(|script| {
+            let info = source_store::parse_script_info(&script)?;
+            Ok((script, info))
+        }) {
+            Ok((script, (name, description, version, author, _))) => {
+                if !name.is_empty() {
+                    summary.name = name;
+                }
+                if !description.is_empty() {
+                    summary.description = description;
+                }
+                if !version.is_empty() {
+                    summary.version = version;
+                }
+                if !author.is_empty() {
+                    summary.author = author;
+                }
+                scripts.push((source.id, script));
+            }
+            Err(error) => summary.error = Some(error),
         }
-    };
-    let (name, description, version, author, _) = match source_store::parse_script_info(&script) {
-        Ok(info) => info,
-        Err(message) => {
-            status.message = format!("LX 默认自定义源无效：{message}");
-            return LxInspection {
-                status,
-                script: None,
-            };
-        }
-    };
-
-    status.source = Some(LxMusicSourceSummary {
-        id: source.id,
-        name: if name.is_empty() { source.name } else { name },
-        description: if description.is_empty() {
-            source.description
-        } else {
-            description
-        },
-        version: if version.is_empty() {
-            source.version
-        } else {
-            version
-        },
-        author: if author.is_empty() {
-            source.author
-        } else {
-            author
-        },
-    });
-    status.can_import = true;
-    status.message = "已检测到 LX 当前默认自定义源".to_string();
-
-    LxInspection {
-        status,
-        script: Some(script),
+        status.sources.push(summary);
     }
+    status.can_import = !scripts.is_empty();
+    status.message = if status.sources.is_empty() {
+        "LX Music 中尚未添加自定义音源".to_string()
+    } else {
+        format!(
+            "检测到 {} 个 LX Music 音源，{} 个可导入",
+            status.sources.len(),
+            scripts.len()
+        )
+    };
+    LxInspection { status, scripts }
 }
 
 #[tauri::command]
@@ -414,43 +369,73 @@ pub fn detect_lx_music_source() -> LxMusicSourceStatus {
 }
 
 #[tauri::command]
-pub fn import_lx_music_default_source(
+pub fn import_lx_music_sources(
     app: AppHandle,
     state: State<'_, AppState>,
+    source_ids: Vec<String>,
 ) -> Result<LxMusicImportResult, String> {
     let inspection = inspect_lx_music();
-    let script = inspection
-        .script
-        .ok_or_else(|| inspection.status.message.clone())?;
-    let imported = source_store::import_source_script(&app, &state, script, true)?;
-    Ok(LxMusicImportResult {
-        source: imported.source,
-        already_imported: imported.already_imported,
-    })
+    let selected: std::collections::HashSet<_> = source_ids.into_iter().collect();
+    if selected.is_empty() {
+        return Err("请选择要导入的音源".into());
+    }
+    if !selected.iter().all(|id| {
+        inspection
+            .status
+            .sources
+            .iter()
+            .any(|source| &source.id == id)
+    }) {
+        return Err("所选 LX 音源已变化，请重新进入音源设置后重试".into());
+    }
+    let mut scripts: std::collections::HashMap<_, _> = inspection.scripts.into_iter().collect();
+    let mut result = LxMusicImportResult {
+        sources: Vec::new(),
+        failures: Vec::new(),
+    };
+    for source in inspection.status.sources {
+        if !selected.contains(&source.id) {
+            continue;
+        }
+        let imported = scripts
+            .remove(&source.id)
+            .ok_or_else(|| source.error.unwrap_or_else(|| "音源脚本不可用".into()))
+            .and_then(|script| source_store::import_source_script(&app, &state, script, true));
+        match imported {
+            Ok(imported) => result.sources.push(ImportedSource {
+                source: imported.source,
+                already_imported: imported.already_imported,
+            }),
+            Err(message) => result.failures.push(SourceImportFailure {
+                id: source.id,
+                name: source.name,
+                message,
+            }),
+        }
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{decode_lx_script, selected_source_id, stored_sources};
+    use super::{decode_lx_script, inspect_sources, stored_sources, unavailable_status};
 
     #[test]
-    fn reads_current_and_legacy_default_source_fields() {
-        assert_eq!(
-            selected_source_id(&json!({
-                "setting": { "common.apiSource": "user_api_current" }
-            }))
-            .as_deref(),
-            Some("user_api_current")
-        );
-        assert_eq!(
-            selected_source_id(&json!({
-                "setting": { "apiSource": "user_api_legacy" }
-            }))
-            .as_deref(),
-            Some("user_api_legacy")
-        );
+    fn inspects_every_source_without_requiring_a_default() {
+        let sources = stored_sources(json!({"userApis": [
+            {"id": "first", "script": "/**\n * @name 第一音源\n */\ncode"},
+            {"id": "broken", "script": "gz_invalid"},
+            {"id": "second", "script": "/**\n * @name 第二音源\n */\ncode"}
+        ]}))
+        .unwrap();
+        let inspection = inspect_sources(unavailable_status(""), sources);
+        assert!(inspection.status.can_import);
+        assert_eq!(inspection.status.sources.len(), 3);
+        assert_eq!(inspection.scripts.len(), 2);
+        assert!(inspection.status.sources[1].error.is_some());
+        assert_eq!(inspection.scripts[1].0, "second");
     }
 
     #[test]
@@ -481,6 +466,27 @@ mod tests {
         assert_eq!(
             decode_lx_script("gz_eJzLSM3JyVcozi8tSk4FAB7RBMY=").expect("zlib script should decode"),
             "hello source"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a local LX Music installation"]
+    fn detects_installed_sources_without_importing_them() {
+        let inspection = super::inspect_lx_music();
+        assert!(inspection.status.installed);
+        assert!(!inspection.status.sources.is_empty());
+        assert_eq!(
+            inspection.scripts.len(),
+            inspection
+                .status
+                .sources
+                .iter()
+                .filter(|source| source.error.is_none())
+                .count()
+        );
+        println!(
+            "detected {} LX Music sources",
+            inspection.status.sources.len()
         );
     }
 }

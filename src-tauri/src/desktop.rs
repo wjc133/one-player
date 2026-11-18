@@ -235,6 +235,45 @@ pub fn set_desktop_close_behavior(
 }
 
 #[tauri::command]
+pub fn set_desktop_tray_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        tray.set_visible(visible)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "链接无效".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("仅支持在浏览器中打开 HTTP 或 HTTPS 链接".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let mut command = {
+            let mut command = std::process::Command::new("open");
+            command.arg("--");
+            command
+        };
+        #[cfg(target_os = "windows")]
+        let mut command = std::process::Command::new("explorer");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let mut command = std::process::Command::new("xdg-open");
+        let status = command
+            .arg(parsed.as_str())
+            .status()
+            .map_err(|error| format!("打开浏览器失败：{error}"))?;
+        if !status.success() {
+            return Err("无法打开默认浏览器".to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub fn complete_window_close(app: AppHandle, behavior: CloseBehavior) -> Result<(), String> {
     match behavior {
         CloseBehavior::Quit => app.exit(0),

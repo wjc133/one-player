@@ -1,25 +1,28 @@
-import { ArrowLeft, Check, ChevronRight, CircleAlert, Download, ListMusic, LoaderCircle, Search, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, ChevronRight, CircleAlert, Download, ListMusic, LoaderCircle, Merge, Search, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import type {
   ImportPlaylistCatalog,
   ImportedPlaylist,
-  OnlineSourceKey,
+  PlaylistImportSource,
   PlaylistImportPlatform,
   PlaylistImportResult,
+  PlayList,
 } from '../types'
 import { detectPlaylistImportPlatforms, importPlatformPlaylists, listImportPlaylists } from '../lib/tauri'
 import { CachedCover } from './CachedCover'
+import { PlaylistDestinationPicker } from './PlaylistDestinationPicker'
 
 interface PlaylistImportModalProps {
   proxy: string
-  onImport: (source: OnlineSourceKey, playlists: ImportedPlaylist[]) => Promise<void>
+  playlists: PlayList[]
+  onImport: (source: PlaylistImportSource, playlists: ImportedPlaylist[], targetId?: string) => Promise<void>
   onClose: () => void
 }
 
-const platformMarks: Record<OnlineSourceKey, string> = { wy: '云', tx: 'Q', kg: '酷', kw: '我', mg: '咪' }
+const platformMarks: Record<PlaylistImportSource, string> = { wy: '云', tx: 'Q', kg: '酷', kw: '我', mg: '咪', lx: 'LX' }
 
-export function PlaylistImportModal({ proxy, onImport, onClose }: PlaylistImportModalProps) {
+export function PlaylistImportModal({ proxy, playlists, onImport, onClose }: PlaylistImportModalProps) {
   const [platforms, setPlatforms] = useState<PlaylistImportPlatform[]>([])
   const [platform, setPlatform] = useState<PlaylistImportPlatform | null>(null)
   const [catalog, setCatalog] = useState<ImportPlaylistCatalog | null>(null)
@@ -32,7 +35,11 @@ export function PlaylistImportModal({ proxy, onImport, onClose }: PlaylistImport
   const [result, setResult] = useState<PlaylistImportResult | null>(null)
   const [refresh, setRefresh] = useState(0)
   const [progress, setProgress] = useState({ completed: 0, total: 0 })
+  const [targetId, setTargetId] = useState('')
+  const [targetPickerOpen, setTargetPickerOpen] = useState(false)
   const dialogRef = useRef<HTMLDivElement>(null)
+  const destinationRef = useRef<HTMLDivElement>(null)
+  const mergeButtonRef = useRef<HTMLButtonElement>(null)
   const allRef = useRef<HTMLInputElement>(null)
   const busyRef = useRef(false)
 
@@ -79,15 +86,28 @@ export function PlaylistImportModal({ proxy, onImport, onClose }: PlaylistImport
   }, [catalog, query, kind])
   const selectedVisible = filtered.filter((item) => selected.has(item.id)).length
   const allSelected = filtered.length > 0 && selectedVisible === filtered.length
+  const target = playlists.find((playlist) => playlist.id === targetId)
 
   useEffect(() => {
     if (allRef.current) allRef.current.indeterminate = selectedVisible > 0 && !allSelected
   }, [selectedVisible, allSelected])
 
+  useEffect(() => {
+    if (!targetPickerOpen) return
+    const closePicker = (event: PointerEvent) => {
+      if (event.target instanceof Node && !destinationRef.current?.contains(event.target)) {
+        setTargetPickerOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', closePicker)
+    return () => document.removeEventListener('pointerdown', closePicker)
+  }, [targetPickerOpen])
+
   const close = () => { if (!busyRef.current) onClose() }
 
   async function confirmImport() {
     if (!platform || !selected.size || busyRef.current) return
+    if (targetId && !target) { setError('目标歌单不存在，请重新选择'); return }
     busyRef.current = true
     setBusy(true)
     setError('')
@@ -95,7 +115,7 @@ export function PlaylistImportModal({ proxy, onImport, onClose }: PlaylistImport
     setProgress({ completed: 0, total: selected.size })
     try {
       const imported = await importPlatformPlaylists(platform.source, [...selected], proxy.trim() || undefined)
-      if (imported.playlists.length) await onImport(platform.source, imported.playlists)
+      if (imported.playlists.length) await onImport(platform.source, imported.playlists, targetId || undefined)
       if (!imported.failures.length) {
         onClose()
         return
@@ -122,9 +142,16 @@ export function PlaylistImportModal({ proxy, onImport, onClose }: PlaylistImport
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
+          if (event.key === 'Escape' && targetPickerOpen) {
+            event.preventDefault()
+            event.stopPropagation()
+            setTargetPickerOpen(false)
+            mergeButtonRef.current?.focus()
+            return
+          }
           if (event.key === 'Escape') { event.stopPropagation(); close() }
           if (event.key !== 'Tab') return
-          const elements = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]') ?? [])]
+          const elements = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]') ?? [])]
           const first = elements[0]
           const last = elements[elements.length - 1]
           if (!first) { event.preventDefault(); return }
@@ -141,7 +168,7 @@ export function PlaylistImportModal({ proxy, onImport, onClose }: PlaylistImport
         <div className="playlist-import-heading">
           {platform ? (
             <button className="icon-button" disabled={busy} aria-label="重新选择平台" onClick={() => {
-              setPlatform(null); setCatalog(null); setSelected(new Set()); setQuery(''); setKind('all'); setResult(null)
+              setPlatform(null); setCatalog(null); setSelected(new Set()); setQuery(''); setKind('all'); setResult(null); setTargetId(''); setTargetPickerOpen(false)
             }}>
               <ArrowLeft size={19} />
             </button>
@@ -153,7 +180,9 @@ export function PlaylistImportModal({ proxy, onImport, onClose }: PlaylistImport
         </div>
         <p className="playlist-import-description">
           {platform
-            ? `${catalog?.accountName ? `${catalog.accountName} · ` : ''}仅展示个人创建和收藏的歌单，导入后保存在本机。`
+            ? platform.source === 'lx'
+              ? '读取 LX Music 的默认列表、我的收藏和自建歌单，保留歌曲顺序与各平台信息。'
+              : `${catalog?.accountName ? `${catalog.accountName} · ` : ''}仅展示个人创建和收藏的歌单，导入后保存在本机。`
             : '选择已安装的音乐平台，把熟悉的歌单带到这里。'}
         </p>
 
@@ -215,6 +244,35 @@ export function PlaylistImportModal({ proxy, onImport, onClose }: PlaylistImport
                 </label>
               ))}
               {!filtered.length && <div className="playlist-import-empty"><ListMusic size={26} /><span>{catalog.playlists.length ? '没有匹配的歌单' : '尚未找到个人歌单，请先在此平台打开「我的音乐」后重试。'}</span></div>}
+            </div>
+            <div ref={destinationRef} className="playlist-import-destination">
+              <button
+                ref={mergeButtonRef}
+                className={`secondary-button playlist-import-merge-button ${target ? 'active' : ''}`}
+                disabled={busy || !selected.size}
+                aria-expanded={targetPickerOpen}
+                onClick={() => setTargetPickerOpen((current) => !current)}
+              >
+                <Merge size={15} />
+                <span>{target ? `合并到：${target.name}` : '合并到…'}</span>
+                <ChevronDown size={14} />
+              </button>
+              {target && (
+                <button className="playlist-import-separate" disabled={busy} onClick={() => { setTargetId(''); setTargetPickerOpen(false) }}>
+                  分别导入为歌单
+                </button>
+              )}
+              {targetPickerOpen && (
+                <div className="playlist-import-destination-panel">
+                  <PlaylistDestinationPicker
+                    playlists={playlists}
+                    value={targetId}
+                    onChange={(id) => { setTargetId(id); setTargetPickerOpen(false); mergeButtonRef.current?.focus() }}
+                    disabled={busy}
+                  />
+                </div>
+              )}
+              <small>{target ? '所选歌单的歌曲将合并到此歌单，重复歌曲自动跳过。' : '默认分别导入，也可将所选歌单合并到已有歌单。'}</small>
             </div>
           </>
         ) : null}

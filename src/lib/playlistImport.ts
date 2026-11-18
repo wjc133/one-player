@@ -1,10 +1,10 @@
-import type { ImportedPlaylist, MusicTrack, OnlineSourceKey, PlayList } from '../types'
+import type { ImportedPlaylist, MusicTrack, PlaylistImportSource, PlayList } from '../types'
 
 const trackKey = (track: MusicTrack) => `${track.source}:${track.songmid}`
 
 export function mergeImportedPlaylists(
   existing: PlayList[],
-  platform: OnlineSourceKey,
+  platform: PlaylistImportSource,
   incoming: ImportedPlaylist[],
   importedAt = Date.now(),
 ): PlayList[] {

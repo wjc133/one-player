@@ -26,40 +26,40 @@ pub struct ImportPlatform {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportPlaylistSummary {
-    id: String,
-    name: String,
-    cover_url: Option<String>,
-    track_count: usize,
-    kind: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) cover_url: Option<String>,
+    pub(crate) track_count: usize,
+    pub(crate) kind: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportPlaylistCatalog {
-    account_name: String,
-    playlists: Vec<ImportPlaylistSummary>,
+    pub(crate) account_name: String,
+    pub(crate) playlists: Vec<ImportPlaylistSummary>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportedPlaylist {
-    external_id: String,
-    name: String,
-    cover_url: Option<String>,
-    tracks: Vec<Value>,
+    pub(crate) external_id: String,
+    pub(crate) name: String,
+    pub(crate) cover_url: Option<String>,
+    pub(crate) tracks: Vec<Value>,
 }
 
 #[derive(Serialize)]
 pub struct ImportFailure {
-    id: String,
-    name: String,
-    message: String,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) message: String,
 }
 
 #[derive(Serialize)]
 pub struct PlaylistImportResult {
-    playlists: Vec<ImportedPlaylist>,
-    failures: Vec<ImportFailure>,
+    pub(crate) playlists: Vec<ImportedPlaylist>,
+    pub(crate) failures: Vec<ImportFailure>,
 }
 
 struct CachedPlaylist {
@@ -114,7 +114,7 @@ fn platform_installed(app_names: &[&str]) -> bool {
 #[tauri::command]
 pub async fn detect_playlist_import_platforms() -> Result<Vec<ImportPlatform>, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        [
+        let mut platforms: Vec<_> = [
             (
                 "wy",
                 "网易云音乐",
@@ -143,7 +143,26 @@ pub async fn detect_playlist_import_platforms() -> Result<Vec<ImportPlatform>, S
                 },
             }
         })
-        .collect()
+        .collect();
+        let installed = crate::lx_import::lx_user_data_path().is_ok();
+        let can_import = installed && crate::lx_playlists::database_path().is_ok();
+        platforms.insert(
+            0,
+            ImportPlatform {
+                source: "lx".into(),
+                name: "LX Music".into(),
+                installed,
+                can_import,
+                message: if !installed {
+                    "未检测到 LX Music 本地配置".into()
+                } else if !can_import {
+                    "请先启动 LX Music 并打开我的列表".into()
+                } else {
+                    "从本机导入默认列表、我的收藏和自建歌单".into()
+                },
+            },
+        );
+        platforms
     })
     .await
     .map_err(|error| error.to_string())
@@ -397,6 +416,9 @@ fn load_catalog(source: &str) -> Result<Catalog, String> {
 #[tauri::command]
 pub async fn list_import_playlists(source: String) -> Result<ImportPlaylistCatalog, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        if source == "lx" {
+            return crate::lx_playlists::list_playlists();
+        }
         let catalog = load_catalog(&source)?;
         Ok(ImportPlaylistCatalog {
             account_name: catalog.account_name,
@@ -554,6 +576,13 @@ pub async fn import_platform_playlists(
 ) -> Result<PlaylistImportResult, String> {
     if playlist_ids.is_empty() || playlist_ids.len() > 2000 {
         return Err("请选择 1 至 2000 个歌单".into());
+    }
+    if source == "lx" {
+        return tauri::async_runtime::spawn_blocking(move || {
+            crate::lx_playlists::import_playlists(&app, playlist_ids)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
     }
     let mut catalog = tauri::async_runtime::spawn_blocking(move || load_catalog(&source))
         .await

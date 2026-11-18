@@ -16,6 +16,7 @@ import {
   Minimize2,
   Minus,
   MoreHorizontal,
+  MoreVertical,
   Music2,
   Pause,
   Play,
@@ -63,6 +64,7 @@ import type {
   ImportedPlaylist,
   LocalMusicMetadata,
   LxMusicSourceStatus,
+  PlaylistImportSource,
   LyricPayload,
   MusicTrack,
   OnlineSourceKey,
@@ -85,13 +87,23 @@ import { SourceRuntime } from './lib/sourceRuntime'
 import { updateSourceFromUrl } from './lib/sourceUpdater'
 import { WalkmanPage } from './components/WalkmanPage'
 import { AppUpdateConfirmation, AppUpdatePanel } from './components/AppUpdatePanel'
+import { UpdateNotes } from './components/UpdateNotes'
 import { useAppUpdater } from './lib/useAppUpdater'
 import { useDesktopIntegration } from './lib/useDesktopIntegration'
-import { getActiveLyricIndex, seekAudio } from './lib/playback'
+import {
+  getActiveLyricIndex,
+  getNextTrackAfterFailure,
+  playbackTrackKey,
+  seekAudio,
+} from './lib/playback'
 import { CloseChoiceDialog } from './components/CloseChoiceDialog'
 import { mergeImportedPlaylists } from './lib/playlistImport'
+import { mergePlaylists, mergeTracksIntoPlaylist, renamePlaylist } from './lib/playlists'
 import { LibraryNavigation } from './components/LibraryNavigation'
 import { PlaylistImportModal } from './components/PlaylistImportModal'
+import { PlaylistActionMenu } from './components/PlaylistActionMenu'
+import { PlaylistMergeDialog, PlaylistRenameDialog } from './components/PlaylistDialogs'
+import { LxSourceImportModal } from './components/LxSourceImportModal'
 import { CachedCover, CoverCacheProvider, useCoverUrl } from './components/CachedCover'
 import { resolveCoverUrl } from './lib/coverCache'
 import { getStorageWarning, localStore, subscribeStorageWarning } from './lib/storage'
@@ -109,7 +121,8 @@ import {
   importCustomSourceFile,
   importCustomSourceScript,
   inspectCustomSourceUpdate,
-  importLxMusicDefaultSource,
+  importLxMusicSources,
+  openExternalUrl,
   listDownloads,
   listCustomSources,
   removeCustomSource,
@@ -122,6 +135,7 @@ import {
 
 type View = 'search' | 'library' | 'downloads' | 'walkman' | 'settings'
 type SearchMode = 'track' | 'album'
+type SettingsTab = 'general' | 'sources' | 'updates'
 
 const PLAYER_PAGE_TRANSITION_MS = 520
 const PLAYBACK_FADE_MS = 300
@@ -169,6 +183,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   overwriteExistingTags: true,
   autoCheckUpdates: true,
   closeBehavior: 'ask',
+  showMenuBarIcon: true,
   menuBarLyrics: false,
   lyricFontScale: 100,
   proxy: '',
@@ -445,6 +460,7 @@ const trackAlbumSummary = (track: MusicTrack): AlbumSummary | null => {
 function App() {
   const storageWarning = useSyncExternalStore(subscribeStorageWarning, getStorageWarning)
   const [view, setView] = useState<View>('search')
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
   const appUpdate = useAppUpdater(settings)
   const [appUpdateConfirmationOpen, setAppUpdateConfirmationOpen] = useState(false)
@@ -487,6 +503,9 @@ function App() {
     useState<MusicTrack | null>(null)
   const [playlistCreateOpen, setPlaylistCreateOpen] = useState(false)
   const [playlistImportOpen, setPlaylistImportOpen] = useState(false)
+  const [playlistMenu, setPlaylistMenu] = useState<{ playlistId: string; x: number; y: number } | null>(null)
+  const [playlistToRename, setPlaylistToRename] = useState<PlayList | null>(null)
+  const [playlistToMerge, setPlaylistToMerge] = useState<PlayList | null>(null)
   const [newPlaylistName, setNewPlaylistName] = useState('')
   const [localMusicImporting, setLocalMusicImporting] = useState(false)
   const [legacyDownloads] = useState<LegacyDownloadItem[]>(() =>
@@ -530,13 +549,24 @@ function App() {
   const orderedQueueRef = useRef<MusicTrack[]>([])
   const [playbackMode, setPlaybackMode] =
     useState<PlaybackMode>(loadPlaybackMode)
+  const playbackModeRef = useRef(playbackMode)
   const [queueOpen, setQueueOpen] = useState(false)
   const [albumDownloadsInProgress, setAlbumDownloadsInProgress] = useState<
     Set<string>
   >(new Set())
   const [currentTrack, setCurrentTrack] = useState<MusicTrack | null>(null)
   const [currentQuality, setCurrentQuality] = useState<Quality>('320k')
-  const [audioUrl, setAudioUrl] = useState('')
+  const [audioSource, setAudioSource] = useState<{
+    requestId: number
+    url: string
+  } | null>(null)
+  const playbackRequestRef = useRef(0)
+  const playbackAttemptRef = useRef<{
+    requestId: number
+    track: MusicTrack
+    failed: boolean
+  } | null>(null)
+  const failedTrackKeysRef = useRef(new Set<string>())
   const [isResolving, setIsResolving] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
@@ -686,14 +716,19 @@ function App() {
     audioFadeFrameRef.current = requestAnimationFrame(step)
   }
 
-  useEffect(() => cancelPlaybackFade, [])
+  useEffect(() => () => {
+    cancelPlaybackFade()
+    playbackRequestRef.current += 1
+    playbackAttemptRef.current = null
+  }, [])
 
   const [toast, setToast] = useState('')
   const [onlineSourceUrl, setOnlineSourceUrl] = useState('')
   const [sourceBusy, setSourceBusy] = useState(false)
   const [lxSourceStatus, setLxSourceStatus] =
     useState<LxMusicSourceStatus | null>(null)
-  const [lxSourceChecking, setLxSourceChecking] = useState(true)
+  const [lxSourceChecking, setLxSourceChecking] = useState(false)
+  const [lxSourcePickerOpen, setLxSourcePickerOpen] = useState(false)
   const [updateAlert, setUpdateAlert] = useState<{
     sourceId: string
     source: string
@@ -715,6 +750,7 @@ function App() {
   const activePlaylist = showingFavoriteAlbums
     ? null
     : playlists.find((playlist) => playlist.id === activePlaylistId) ?? playlists[0]
+  const menuPlaylist = playlists.find((playlist) => playlist.id === playlistMenu?.playlistId)
   const favoriteTracks = useMemo(
     () => playlists.flatMap((playlist) => playlist.tracks),
     [playlists],
@@ -757,6 +793,7 @@ function App() {
   }, [queue])
 
   useEffect(() => {
+    playbackModeRef.current = playbackMode
     localStore.setItem(PLAYBACK_MODE_STORAGE_KEY, playbackMode)
   }, [playbackMode])
 
@@ -962,15 +999,25 @@ function App() {
   }, [volume])
 
   useEffect(() => {
-    if (!audioUrl || !audioRef.current) return
-    audioRef.current
+    const audio = audioRef.current
+    if (!audioSource || !audio) return
+    const { requestId } = audioSource
+    let cancelled = false
+    audio.volume = volumeRef.current
+    void audio
       .play()
-      .then(() => setIsPlaying(true))
-      .catch((error) => {
-        setIsPlaying(false)
-        showToast(`播放失败：${error instanceof Error ? error.message : String(error)}`)
+      .then(() => {
+        if (!cancelled && requestId === playbackRequestRef.current) {
+          setIsPlaying(!audio.paused)
+        }
       })
-  }, [audioUrl])
+      .catch((error) => {
+        if (!cancelled) handlePlaybackFailure(requestId, error)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [audioSource])
 
   useEffect(() => {
     let cancelled = false
@@ -998,7 +1045,9 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (view !== 'settings' || settingsTab !== 'sources') return
     let cancelled = false
+    setLxSourceChecking(true)
     void detectLxMusicSource()
       .then((status) => {
         if (!cancelled) setLxSourceStatus(status)
@@ -1008,6 +1057,7 @@ function App() {
           setLxSourceStatus({
             installed: false,
             canImport: false,
+            sources: [],
             message: `检测 LX Music 失败：${String(error)}`,
           })
         }
@@ -1018,7 +1068,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [view, settingsTab])
 
   async function activateSource(
     id: string,
@@ -1417,14 +1467,54 @@ function App() {
     }
   }
 
+  function handlePlaybackFailure(requestId: number, error: unknown) {
+    const attempt = playbackAttemptRef.current
+    if (
+      !attempt ||
+      attempt.requestId !== requestId ||
+      requestId !== playbackRequestRef.current ||
+      attempt.failed ||
+      (error instanceof Error && error.name === 'AbortError')
+    ) return
+
+    attempt.failed = true
+    cancelPlaybackFade()
+    audioRef.current?.pause()
+    setIsPlaying(false)
+    failedTrackKeysRef.current.add(playbackTrackKey(attempt.track))
+    const nextTrack = getNextTrackAfterFailure(
+      queueRef.current,
+      attempt.track,
+      failedTrackKeysRef.current,
+      playbackModeRef.current !== 'sequence',
+    )
+    const message = error instanceof Error ? error.message : String(error)
+    if (nextTrack) {
+      showToast(`「${attempt.track.name}」播放失败，已跳过：${message}`)
+      void playTrack(nextTrack, queueRef.current, {
+        canonicalQueue: orderedQueueRef.current,
+        preserveRandomQueue: true,
+        continueAfterFailure: true,
+      })
+    } else {
+      setAudioSource(null)
+      setIsResolving(false)
+      showToast(`「${attempt.track.name}」播放失败，后续没有可播放的歌曲：${message}`)
+    }
+  }
+
   async function playTrack(
     track: MusicTrack,
     list: MusicTrack[] = queueRef.current,
     options: {
       canonicalQueue?: MusicTrack[]
       preserveRandomQueue?: boolean
+      continueAfterFailure?: boolean
     } = {},
   ) {
+    const requestId = ++playbackRequestRef.current
+    playbackAttemptRef.current = { requestId, track, failed: false }
+    if (!options.continueAfterFailure) failedTrackKeysRef.current.clear()
     cancelPlaybackFade()
     if (audioRef.current) {
       audioRef.current.pause()
@@ -1446,6 +1536,7 @@ function App() {
     setCurrentTrack(track)
     const artworkRequestId = ++artworkRequestRef.current
     setQueue(nextQueue)
+    queueRef.current = nextQueue
     orderedQueueRef.current = canonicalQueue
     setArtwork(track.img ?? null)
     setCurrentQuality(
@@ -1454,7 +1545,7 @@ function App() {
     setCurrentTime(0)
     setDuration(0)
     setIsResolving(true)
-    setAudioUrl('')
+    setAudioSource(null)
     void loadTrackLyrics(track)
     void getBuiltinArtwork(track, settings)
       .then((url) => {
@@ -1463,12 +1554,13 @@ function App() {
       .catch(() => {})
     try {
       const resolved = await resolveTrackUrl(track)
+      if (requestId !== playbackRequestRef.current) return
       setCurrentQuality(resolved.quality)
-      setAudioUrl(resolved.url)
+      setAudioSource({ requestId, url: resolved.url })
     } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error))
+      handlePlaybackFailure(requestId, error)
     } finally {
-      setIsResolving(false)
+      if (requestId === playbackRequestRef.current) setIsResolving(false)
     }
   }
 
@@ -1537,6 +1629,11 @@ function App() {
   function togglePlayback() {
     if (!audioRef.current) return
 
+    if (!audioSource && currentTrack && !isResolving) {
+      void playTrack(currentTrack)
+      return
+    }
+
     if (audioFadeDirectionRef.current === 'out') {
       cancelPlaybackFade()
       fadeAudioVolume(volumeRef.current, 'in')
@@ -1554,17 +1651,21 @@ function App() {
     }
 
     if (audioRef.current.paused) {
+      const requestId = playbackRequestRef.current
+      const audio = audioRef.current
       audioRef.current.volume = 0
-      void audioRef.current
+      void audio
         .play()
         .then(() => {
+          if (requestId !== playbackRequestRef.current) return
           if (audioFadeDirectionRef.current === null) {
             fadeAudioVolume(volumeRef.current, 'in')
           }
         })
         .catch((error) => {
-          if (audioRef.current) audioRef.current.volume = volumeRef.current
-          showToast(`播放失败：${error instanceof Error ? error.message : String(error)}`)
+          if (requestId !== playbackRequestRef.current) return
+          audio.volume = volumeRef.current
+          handlePlaybackFailure(requestId, error)
         })
     } else {
       fadeAudioVolume(0, 'out', () => {
@@ -1614,11 +1715,54 @@ function App() {
     return true
   }
 
-  async function importPlaylists(source: OnlineSourceKey, incoming: ImportedPlaylist[]) {
-    const next = mergeImportedPlaylists(playlistsRef.current, source, incoming)
+  async function savePlaylistChange(next: PlayList[]) {
     await persistPlaylists(next)
     playlistsRef.current = next
     setPlaylists(next)
+  }
+
+  async function handleRenamePlaylist(playlistId: string, name: string) {
+    const next = renamePlaylist(playlistsRef.current, playlistId, name)
+    await savePlaylistChange(next)
+    showToast('歌单已重命名')
+  }
+
+  async function handleMergePlaylist(sourceId: string, targetId: string) {
+    const existing = playlistsRef.current
+    const target = existing.find((playlist) => playlist.id === targetId)
+    const next = mergePlaylists(existing, sourceId, targetId)
+    const merged = next.find((playlist) => playlist.id === targetId)!
+    await savePlaylistChange(next)
+    setActivePlaylistId(targetId)
+    showToast(`已合并到「${merged.name}」，新增 ${merged.tracks.length - (target?.tracks.length ?? 0)} 首歌曲`)
+  }
+
+  function openPlaylistContextMenu(playlistId: string, event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    if (!playlistStorageReady) return
+    event.currentTarget.focus()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    setActivePlaylistId(playlistId)
+    setPlaylistMenu({
+      playlistId,
+      x: event.clientX || bounds.left + 20,
+      y: event.clientY || bounds.bottom,
+    })
+  }
+
+  async function importPlaylists(source: PlaylistImportSource, incoming: ImportedPlaylist[], targetId?: string) {
+    const existing = playlistsRef.current
+    const next = targetId
+      ? mergeTracksIntoPlaylist(existing, targetId, incoming.flatMap((playlist) => playlist.tracks))
+      : mergeImportedPlaylists(existing, source, incoming)
+    await savePlaylistChange(next)
+    if (targetId) {
+      const target = next.find((playlist) => playlist.id === targetId)!
+      const previousCount = existing.find((playlist) => playlist.id === targetId)!.tracks.length
+      setActivePlaylistId(targetId)
+      showToast(`已将 ${incoming.length} 个歌单合并到「${target.name}」，新增 ${target.tracks.length - previousCount} 首歌曲`)
+      return
+    }
     const first = next.find((item) =>
       item.importSource?.platform === source && item.importSource.playlistId === incoming[0]?.externalId,
     )
@@ -1921,6 +2065,9 @@ function App() {
       const deletedPath = downloadToDelete.path
       setDownloadedFiles((files) => files.filter((file) => file.path !== deletedPath))
       if (currentTrack?.filePath === deletedPath) {
+        playbackRequestRef.current += 1
+        playbackAttemptRef.current = null
+        failedTrackKeysRef.current.clear()
         cancelPlaybackFade()
         audioRef.current?.pause()
         if (audioRef.current) {
@@ -1931,7 +2078,8 @@ function App() {
         setQueue([])
         queueRef.current = []
         orderedQueueRef.current = []
-        setAudioUrl('')
+        setAudioSource(null)
+        setIsResolving(false)
         setIsPlaying(false)
       } else {
         const remainingQueue = queue.filter(
@@ -2017,12 +2165,13 @@ function App() {
     let nextAlert: typeof updateAlert | null = null
     let candidateActive = false
     try {
-      const { source, runtime, capabilities } = await updateSourceFromUrl(
+      const result = await updateSourceFromUrl(
         updateAlert.sourceId,
         updateAlert.updateUrl,
         settingsRef.current.proxy,
         {
           request: requestHttp,
+          openExternalUrl,
           inspect: inspectCustomSourceUpdate,
           save: async (id, script) => {
             if (activationId !== sourceActivationRef.current) {
@@ -2053,6 +2202,12 @@ function App() {
           },
         },
       )
+      if (result.kind === 'browser') {
+        setUpdateAlert(null)
+        showToast('更新地址已在默认浏览器中打开')
+        return
+      }
+      const { source, runtime, capabilities } = result
       setSources((items) =>
         items.map((item) => item.id === source.id ? source : item),
       )
@@ -2084,39 +2239,35 @@ function App() {
     setSourceUpdateError('')
   }
 
-  async function refreshLxMusicSource() {
-    setLxSourceChecking(true)
-    try {
-      setLxSourceStatus(await detectLxMusicSource())
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setLxSourceStatus({
-        installed: false,
-        canImport: false,
-        message: `检测 LX Music 失败：${message}`,
-      })
-      showToast(`检测 LX Music 失败：${message}`)
-    } finally {
-      setLxSourceChecking(false)
+  async function handleLxSourceImport() {
+    if (!lxSourceStatus?.canImport || sourceBusy || lxSourceChecking) return
+    if (lxSourceStatus.sources.length > 1) {
+      setLxSourcePickerOpen(true)
+      return
     }
+    await importSelectedLxSources(lxSourceStatus.sources.map((source) => source.id))
   }
 
-  async function handleLxSourceImport() {
-    if (!lxSourceStatus?.canImport) return
+  async function importSelectedLxSources(sourceIds: string[]) {
     setSourceBusy(true)
     try {
-      const result = await importLxMusicDefaultSource()
+      const result = await importLxMusicSources(sourceIds)
       const list = await listCustomSources()
       setSources(list)
-      await activateSource(result.source.id, list)
-      showToast(
-        result.alreadyImported
-          ? `已启用 LX 音源「${result.source.name}」`
-          : `已从 LX Music 导入「${result.source.name}」`,
-      )
+      const first = result.sources[0]?.source
+      if (first && (sourceIds.length === 1 || !activeSourceId)) {
+        await activateSource(first.id, list)
+      }
+      if (result.failures.length) {
+        showToast(`已添加 ${result.sources.length} 个音源，${result.failures.length} 个导入失败`)
+      } else {
+        showToast(`已从 LX Music 添加 ${result.sources.length} 个音源`)
+        setLxSourcePickerOpen(false)
+      }
+      return result
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error))
-      await refreshLxMusicSource()
+      throw error
     } finally {
       setSourceBusy(false)
     }
@@ -2212,15 +2363,29 @@ function App() {
     >
     <div className="app-shell" onPointerDownCapture={event => { downloadPointerRef.current = { x: event.clientX, y: event.clientY } }}>
       <audio
+        key={audioSource?.requestId ?? 'idle'}
         ref={audioRef}
-        src={audioUrl}
+        src={audioSource?.url}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onTimeUpdate={(event) => syncPlaybackPosition(event.currentTarget)}
         onSeeked={(event) => syncPlaybackPosition(event.currentTarget)}
         onLoadedMetadata={(event) => syncPlaybackPosition(event.currentTarget)}
         onDurationChange={(event) => syncPlaybackPosition(event.currentTarget)}
+        onError={(event) => {
+          const error = event.currentTarget.error
+          if (!audioSource || !error) return
+          handlePlaybackFailure(
+            audioSource.requestId,
+            new Error(error.message || `音频加载或解码失败（错误码 ${error.code}）`),
+          )
+        }}
         onEnded={() => {
+          if (
+            !audioSource ||
+            audioSource.requestId !== playbackRequestRef.current ||
+            playbackAttemptRef.current?.failed
+          ) return
           setIsPlaying(false)
           playAdjacent(1, 'ended')
         }}
@@ -2311,7 +2476,7 @@ function App() {
                 ? '正在初始化…'
                 : sourceStatus.message ?? '前往设置导入脚本'}
           </small>
-          <button onClick={() => setView('settings')}>
+          <button onClick={() => { setSettingsTab('sources'); setView('settings') }}>
             {sources.length ? `管理 ${sources.length} 个音源` : '管理音源'}
           </button>
         </div>
@@ -2433,6 +2598,7 @@ function App() {
                   activeId={showingFavoriteAlbums ? ALBUM_COLLECTION_ID : activePlaylist?.id ?? ''}
                   albumCollectionId={ALBUM_COLLECTION_ID}
                   onSelect={setActivePlaylistId}
+                  onContextMenu={openPlaylistContextMenu}
                   onCreate={() => {
                     setNewPlaylistName('')
                     setPlaylistCreateOpen(true)
@@ -2441,19 +2607,35 @@ function App() {
                 <div className="library-detail" key={activePlaylistId}>
                   <div className="library-detail-heading">
                     <div>
-                      <span className="eyebrow">{showingFavoriteAlbums ? 'ALBUMS' : activePlaylist?.importSource ? providerNames[activePlaylist.importSource.platform] : 'PLAYLIST'}</span>
+                      <span className="eyebrow">{showingFavoriteAlbums ? 'ALBUMS' : activePlaylist?.importSource ? activePlaylist.importSource.platform === 'lx' ? 'LX Music' : providerNames[activePlaylist.importSource.platform] : 'PLAYLIST'}</span>
                       <h2>{showingFavoriteAlbums ? '专辑收藏' : activePlaylist?.name}</h2>
                       <p>{showingFavoriteAlbums ? `${favoriteAlbums.length} 张专辑` : `${activePlaylist?.tracks.length ?? 0} 首歌曲`}</p>
                     </div>
                     {!showingFavoriteAlbums && activePlaylist && (
-                      <button
-                        className="secondary-button library-local-button"
-                        onClick={() => void importLocalMusicToPlaylist()}
-                        disabled={localMusicImporting}
-                      >
-                        <FolderOpen size={15} />
-                        {localMusicImporting ? '添加中…' : '添加本地音乐'}
-                      </button>
+                      <div className="library-detail-actions">
+                        <button
+                          className="secondary-button library-local-button"
+                          onClick={() => void importLocalMusicToPlaylist()}
+                          disabled={localMusicImporting}
+                        >
+                          <FolderOpen size={15} />
+                          {localMusicImporting ? '添加中…' : '添加本地音乐'}
+                        </button>
+                        <button
+                          className="secondary-button library-more-button"
+                          aria-label="歌单更多操作"
+                          title="歌单更多操作"
+                          aria-haspopup="menu"
+                          aria-expanded={playlistMenu?.playlistId === activePlaylist.id}
+                          disabled={!playlistStorageReady || localMusicImporting}
+                          onClick={(event) => {
+                            const bounds = event.currentTarget.getBoundingClientRect()
+                            setPlaylistMenu({ playlistId: activePlaylist.id, x: bounds.right - 190, y: bounds.bottom + 6 })
+                          }}
+                        >
+                          <MoreVertical size={17} />
+                        </button>
+                      </div>
                     )}
                   </div>
               {showingFavoriteAlbums ? (
@@ -2548,6 +2730,8 @@ function App() {
 
           {view === 'settings' && (
             <SettingsView
+              tab={settingsTab}
+              onTabChange={setSettingsTab}
               settings={settings}
               setSettings={setSettings}
               sources={sources}
@@ -2561,8 +2745,7 @@ function App() {
               onActivate={(id) => void activateSource(id, sources, true)}
               onLocalImport={() => void handleLocalSourceImport()}
               onOnlineImport={() => void handleOnlineSourceImport()}
-              onLxImport={() => void handleLxSourceImport()}
-              onRefreshLx={() => void refreshLxMusicSource()}
+              onLxImport={() => void handleLxSourceImport().catch(() => {})}
               onRemove={(source) => void handleRemoveSource(source)}
               onToggleUpdate={(source) => void handleToggleUpdateAlert(source)}
               onChooseDirectory={() => void chooseDownloadDirectory()}
@@ -2612,6 +2795,7 @@ function App() {
         onPlaybackMode={cyclePlaybackMode}
         onQueue={() => setQueueOpen(true)}
         menuBarLyrics={settings.menuBarLyrics}
+        showMenuBarIcon={settings.showMenuBarIcon}
         onMenuBarLyrics={toggleMenuBarLyrics}
         onSeek={seekTo}
         onOpen={openPlayerPage}
@@ -2653,6 +2837,7 @@ function App() {
           onPlaybackMode={cyclePlaybackMode}
           onQueue={() => setQueueOpen(true)}
           menuBarLyrics={settings.menuBarLyrics}
+          showMenuBarIcon={settings.showMenuBarIcon}
           onMenuBarLyrics={toggleMenuBarLyrics}
           onSeek={seekTo}
           onOpenAlbum={() => {
@@ -2694,6 +2879,15 @@ function App() {
         />
       )}
 
+      {lxSourcePickerOpen && lxSourceStatus && (
+        <LxSourceImportModal
+          sources={lxSourceStatus.sources}
+          busy={sourceBusy}
+          onImport={importSelectedLxSources}
+          onClose={() => { if (!sourceBusy) setLxSourcePickerOpen(false) }}
+        />
+      )}
+
       {updateAlert && (
         <div className="modal-backdrop" onClick={closeSourceUpdateAlert}>
           <div
@@ -2717,7 +2911,7 @@ function App() {
             </div>
             <h2 id="source-update-title">发现音源更新</h2>
             <p className="modal-source">{updateAlert.source}</p>
-            <pre>{updateAlert.log}</pre>
+            <UpdateNotes className="source-update-notes">{updateAlert.log}</UpdateNotes>
             {sourceUpdateError && (
               <p className="source-update-error" role="alert">{sourceUpdateError}</p>
             )}
@@ -2829,8 +3023,40 @@ function App() {
       {playlistImportOpen && (
         <PlaylistImportModal
           proxy={settings.proxy}
+          playlists={playlists}
           onImport={importPlaylists}
           onClose={() => setPlaylistImportOpen(false)}
+        />
+      )}
+
+      {playlistMenu && menuPlaylist && (
+        <PlaylistActionMenu
+          key={`${playlistMenu.playlistId}:${playlistMenu.x}:${playlistMenu.y}`}
+          playlist={menuPlaylist}
+          x={playlistMenu.x}
+          y={playlistMenu.y}
+          onClose={() => setPlaylistMenu(null)}
+          onRename={() => { setPlaylistMenu(null); setPlaylistToRename(menuPlaylist) }}
+          onMerge={() => { setPlaylistMenu(null); setPlaylistToMerge(menuPlaylist) }}
+        />
+      )}
+
+      {playlistToRename && (
+        <PlaylistRenameDialog
+          key={playlistToRename.id}
+          playlist={playlistToRename}
+          onRename={(name) => handleRenamePlaylist(playlistToRename.id, name)}
+          onClose={() => setPlaylistToRename(null)}
+        />
+      )}
+
+      {playlistToMerge && (
+        <PlaylistMergeDialog
+          key={playlistToMerge.id}
+          playlist={playlistToMerge}
+          playlists={playlists}
+          onMerge={(targetId) => handleMergePlaylist(playlistToMerge.id, targetId)}
+          onClose={() => setPlaylistToMerge(null)}
         />
       )}
 
@@ -3602,6 +3828,8 @@ function DownloadsView(props: DownloadsViewProps) {
 }
 
 interface SettingsViewProps {
+  tab: SettingsTab
+  onTabChange: (tab: SettingsTab) => void
   settings: AppSettings
   setSettings: (
     value: AppSettings | ((current: AppSettings) => AppSettings),
@@ -3618,7 +3846,6 @@ interface SettingsViewProps {
   onLocalImport: () => void
   onOnlineImport: () => void
   onLxImport: () => void
-  onRefreshLx: () => void
   onRemove: (source: CustomSourceInfo) => void
   onToggleUpdate: (source: CustomSourceInfo) => void
   onChooseDirectory: () => void
@@ -3636,8 +3863,34 @@ function SettingsView(props: SettingsViewProps) {
         </div>
       </div>
 
-      <div className="settings-grid">
-        <div className="settings-stack">
+      <div className="settings-tabs" role="tablist" aria-label="设置分类">
+        {([['general', '通用'], ['sources', '音源'], ['updates', '应用更新']] as const).map(([tab, label], index, tabs) => (
+          <button
+            key={tab}
+            id={`settings-tab-${tab}`}
+            role="tab"
+            aria-selected={props.tab === tab}
+            aria-controls={`settings-panel-${tab}`}
+            tabIndex={props.tab === tab ? 0 : -1}
+            className={props.tab === tab ? 'active' : ''}
+            onClick={() => props.onTabChange(tab)}
+            onKeyDown={(event) => {
+              const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+                : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+                  : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null
+              if (next === null) return
+              event.preventDefault()
+              props.onTabChange(tabs[next][0])
+              document.getElementById(`settings-tab-${tabs[next][0]}`)?.focus()
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div id={`settings-panel-${props.tab}`} role="tabpanel" aria-labelledby={`settings-tab-${props.tab}`}>
+        {props.tab === 'general' && (
         <div className="settings-card">
           <div className="settings-card-title">
             <div className="settings-icon">
@@ -3682,7 +3935,7 @@ function SettingsView(props: SettingsViewProps) {
           </SettingRow>
           <SettingRow
             label="点击关闭按钮时"
-            description="隐藏到菜单栏后继续播放，可通过顶部音乐图标恢复窗口"
+            description="隐藏窗口后继续播放，可通过 Dock 或菜单栏图标恢复窗口"
           >
             <select
               aria-label="点击关闭按钮时"
@@ -3699,6 +3952,26 @@ function SettingsView(props: SettingsViewProps) {
               <option value="quit">退出应用</option>
             </select>
           </SettingRow>
+          <SettingRow
+            label="显示菜单栏图标"
+            description="在顶部菜单栏显示 One Player 图标和播放菜单"
+          >
+            <label className="switch">
+              <input
+                type="checkbox"
+                aria-label="显示菜单栏图标"
+                checked={props.settings.showMenuBarIcon}
+                onChange={(event) =>
+                  props.setSettings((current) => ({
+                    ...current,
+                    showMenuBarIcon: event.target.checked,
+                  }))
+                }
+              />
+              <span />
+            </label>
+          </SettingRow>
+          {props.settings.showMenuBarIcon && (
           <SettingRow
             label="菜单栏歌词"
             description="在 macOS 顶部菜单栏显示当前一句歌词，也可从播放列表右侧切换"
@@ -3718,6 +3991,7 @@ function SettingsView(props: SettingsViewProps) {
               <span />
             </label>
           </SettingRow>
+          )}
           <SettingRow
             label="下载目录"
             description="未设置时使用当前用户的系统下载目录"
@@ -3801,9 +4075,10 @@ function SettingsView(props: SettingsViewProps) {
             />
           </SettingRow>
         </div>
-        {props.updatePanel}
-        </div>
+        )}
+        {props.tab === 'updates' && props.updatePanel}
 
+        {props.tab === 'sources' && (
         <div className="settings-card source-manager-card">
           <div className="settings-card-title">
             <div className="settings-icon accent">
@@ -3840,82 +4115,6 @@ function SettingsView(props: SettingsViewProps) {
             </div>
           )}
 
-          <div
-            className={`lx-import-panel ${
-              props.lxSourceStatus?.installed ? 'available' : 'unavailable'
-            }`}
-            title={
-              props.lxSourceStatus?.dataPath ??
-              props.lxSourceStatus?.installPath ??
-              undefined
-            }
-          >
-            <div className="lx-import-main">
-              <div className="lx-import-icon">
-                <Music2 size={18} />
-              </div>
-              <div>
-                <div className="lx-import-heading">
-                  <strong>从 LX Music 一键导入</strong>
-                  <span>
-                    {props.lxSourceChecking
-                      ? '检测中'
-                      : props.lxSourceStatus?.installed
-                        ? '已安装'
-                        : '未安装'}
-                  </span>
-                </div>
-                <p>
-                  {props.lxSourceChecking
-                    ? '正在检测 LX Music 和默认音源配置…'
-                    : props.lxSourceStatus?.message ??
-                      '尚未检测 LX Music'}
-                </p>
-                {props.lxSourceStatus?.source && (
-                  <small>
-                    {props.lxSourceStatus.source.name}
-                    {props.lxSourceStatus.source.version
-                      ? ` · v${props.lxSourceStatus.source.version}`
-                      : ''}
-                    {props.lxSourceStatus.source.author
-                      ? ` · ${props.lxSourceStatus.source.author}`
-                      : ''}
-                  </small>
-                )}
-              </div>
-            </div>
-            <div className="lx-import-actions">
-              <button
-                className="icon-button"
-                onClick={props.onRefreshLx}
-                disabled={props.lxSourceChecking || props.sourceBusy}
-                aria-label="重新检测 LX Music"
-                title="重新检测"
-              >
-                <RefreshCw
-                  className={props.lxSourceChecking ? 'spin' : undefined}
-                  size={16}
-                />
-              </button>
-              <button
-                className="lx-import-button"
-                onClick={props.onLxImport}
-                disabled={
-                  props.sourceBusy ||
-                  props.lxSourceChecking ||
-                  !props.lxSourceStatus?.canImport
-                }
-              >
-                {props.sourceBusy ? (
-                  <LoaderCircle className="spin" size={16} />
-                ) : (
-                  <Upload size={16} />
-                )}
-                导入并启用
-              </button>
-            </div>
-          </div>
-
           <div className="source-import-row">
             <button
               className="secondary-button"
@@ -3924,6 +4123,15 @@ function SettingsView(props: SettingsViewProps) {
             >
               <Upload size={17} />
               本地导入
+            </button>
+            <button
+              className="secondary-button"
+              onClick={props.onLxImport}
+              title={props.lxSourceChecking ? '正在检测 LX Music 所有音源…' : props.lxSourceStatus?.message}
+              disabled={props.sourceBusy || props.lxSourceChecking || !props.lxSourceStatus?.canImport}
+            >
+              {props.lxSourceChecking ? <LoaderCircle className="spin" size={16} /> : <Music2 size={17} />}
+              从 LX Music 导入
             </button>
             <div className="online-import">
               <input
@@ -4022,6 +4230,7 @@ function SettingsView(props: SettingsViewProps) {
             </span>
           </div>
         </div>
+        )}
       </div>
     </section>
   )
@@ -4152,6 +4361,7 @@ interface PlayerBarProps {
   onPlaybackMode: () => void
   onQueue: () => void
   menuBarLyrics: boolean
+  showMenuBarIcon: boolean
   onMenuBarLyrics: () => void
   onSeek: (value: number) => void
   onOpen: () => void
@@ -4344,11 +4554,11 @@ function PlayerBar(props: PlayerBarProps) {
           value={props.volume}
           onChange={(event) => props.onVolume(Number(event.target.value))}
         />
-        <MenuBarLyricsButton
+        {props.showMenuBarIcon && <MenuBarLyricsButton
           enabled={props.menuBarLyrics}
           size={19}
           onToggle={props.onMenuBarLyrics}
-        />
+        />}
       </div>
     </footer>
   )
@@ -4381,6 +4591,7 @@ interface PlayerPageProps {
   onPlaybackMode: () => void
   onQueue: () => void
   menuBarLyrics: boolean
+  showMenuBarIcon: boolean
   onMenuBarLyrics: () => void
   onSeek: (value: number) => void
   onOpenAlbum: () => void
@@ -4598,11 +4809,11 @@ function PlayerPage(props: PlayerPageProps) {
               >
                 A＋
               </button>
-              <MenuBarLyricsButton
+              {props.showMenuBarIcon && <MenuBarLyricsButton
                 enabled={props.menuBarLyrics}
                 size={18}
                 onToggle={props.onMenuBarLyrics}
-              />
+              />}
             </div>
           </div>
           <div className="lyrics-scroll" ref={lyricsScrollRef}>

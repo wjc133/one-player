@@ -1,5 +1,5 @@
 import { Disc3, ListMusic, Music2, Plus, Search, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type MouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import type { PlayList } from '../types'
 import { CachedCover } from './CachedCover'
 
@@ -9,6 +9,7 @@ interface LibraryNavigationProps {
   albumCollectionId: string
   onSelect: (id: string) => void
   onCreate: () => void
+  onContextMenu: (playlistId: string, event: MouseEvent<HTMLButtonElement>) => void
 }
 
 export function LibraryNavigation({
@@ -17,6 +18,7 @@ export function LibraryNavigation({
   albumCollectionId,
   onSelect,
   onCreate,
+  onContextMenu,
 }: LibraryNavigationProps) {
   const [query, setQuery] = useState('')
   const activeRef = useRef<HTMLButtonElement>(null)
@@ -69,6 +71,8 @@ export function LibraryNavigation({
               ref={active ? activeRef : undefined}
               className={`library-playlist-entry ${active ? 'active' : ''}`}
               onClick={() => onSelect(playlist.id)}
+              onContextMenu={(event) => onContextMenu(playlist.id, event)}
+              aria-haspopup="menu"
               aria-current={active ? 'page' : undefined}
               title={playlist.name}
             >

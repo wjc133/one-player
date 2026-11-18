@@ -4,6 +4,7 @@ mod cover_cache;
 mod desktop;
 mod downloads;
 mod lx_import;
+mod lx_playlists;
 mod network;
 mod playlist_import;
 mod playlist_store;
@@ -36,8 +37,10 @@ pub fn run() {
             desktop::set_desktop_close_behavior,
             desktop::complete_window_close,
             desktop::update_desktop_playback,
+            desktop::set_desktop_tray_visible,
+            desktop::open_external_url,
             lx_import::detect_lx_music_source,
-            lx_import::import_lx_music_default_source,
+            lx_import::import_lx_music_sources,
             source_store::list_custom_sources,
             source_store::get_custom_source_script,
             source_store::import_custom_source_script,

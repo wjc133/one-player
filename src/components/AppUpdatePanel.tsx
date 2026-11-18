@@ -1,5 +1,6 @@
 import { Download, LoaderCircle, RefreshCw, X } from 'lucide-react'
 import type { AppUpdater, AppUpdateState } from '../lib/appUpdater'
+import { UpdateNotes } from './UpdateNotes'
 
 const phaseLabels: Record<AppUpdateState['phase'], string> = {
   idle: '检查是否有可用的新版本。',
@@ -67,7 +68,7 @@ export function AppUpdatePanel({
           </span>
         )}
         {state.release?.notes && (
-          <pre className="app-update-notes">{state.release.notes}</pre>
+          <UpdateNotes className="app-update-notes">{state.release.notes}</UpdateNotes>
         )}
         {state.phase === 'downloading' && (
           <div className="app-update-progress">

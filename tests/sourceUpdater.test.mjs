@@ -42,6 +42,7 @@ function fixture(overrides = {}) {
       calls.push(['createRuntime', info])
       return runtime
     },
+    async openExternalUrl(url) { calls.push(['openExternalUrl', url]) },
     ...overrides.dependencies,
   }
   const update = () => updateSourceFromUrl(
@@ -69,16 +70,33 @@ test('source updates use the proxy and initialize the replacement before saving 
   assert.deepEqual(result.capabilities.kw.actions, ['musicUrl'])
 })
 
-test('HTTP failures and download pages never reach source inspection or storage', async () => {
-  for (const [response, message] of [
-    [{ statusCode: 503 }, /HTTP 503/],
-    [{ bodyText: '<html>下载页面</html>' }, /未返回音源脚本/],
-    [{ bodyText: '' }, /未返回音源脚本/],
+test('HTTP failures never reach source inspection or storage', async () => {
+  const { update, calls } = fixture({ response: { statusCode: 503 } })
+  await assert.rejects(update(), /HTTP 503/)
+  assert.deepEqual(calls.map(([name]) => name), ['request'])
+})
+
+test('non-script update links open in the default browser without replacing the source', async () => {
+  for (const response of [
+    { bodyText: '<html>下载页面</html>' },
+    { statusCode: 403, bodyText: '<html>请在浏览器中继续</html>' },
+    { bodyText: '' },
+    { headers: { 'Content-Type': 'text/html; charset=utf-8' } },
+    { bodyText: '{"url":"https://example.com/source.js"}' },
   ]) {
     const { update, calls } = fixture({ response })
-    await assert.rejects(update(), message)
-    assert.deepEqual(calls.map(([name]) => name), ['request'])
+    assert.deepEqual(await update(), { kind: 'browser' })
+    assert.deepEqual(calls.map(([name]) => name), ['request', 'openExternalUrl'])
+    assert.equal(calls[1][1], 'https://example.com/source.js')
   }
+})
+
+test('browser launch failures remain visible for retry', async () => {
+  const { update } = fixture({
+    response: { bodyText: '<html>下载页面</html>' },
+    dependencies: { async openExternalUrl() { throw new Error('无法打开默认浏览器') } },
+  })
+  await assert.rejects(update(), /无法打开默认浏览器/)
 })
 
 test('network and metadata errors leave the existing source untouched', async () => {

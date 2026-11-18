@@ -1,5 +1,6 @@
 export type SourceKey = 'kw' | 'kg' | 'tx' | 'wy' | 'mg' | 'local'
 export type OnlineSourceKey = Exclude<SourceKey, 'local'>
+export type PlaylistImportSource = OnlineSourceKey | 'lx'
 export type Quality = '128k' | '320k' | 'flac' | 'flac24bit'
 export type SourceAction = 'musicUrl' | 'lyric' | 'pic'
 
@@ -102,14 +103,14 @@ export interface PlayList {
   createdAt: number
   coverUrl?: string | null
   importSource?: {
-    platform: OnlineSourceKey
+    platform: PlaylistImportSource
     playlistId: string
     importedAt: number
   }
 }
 
 export interface PlaylistImportPlatform {
-  source: OnlineSourceKey
+  source: PlaylistImportSource
   name: string
   installed: boolean
   canImport: boolean
@@ -157,6 +158,7 @@ export interface LxMusicSourceSummary {
   description: string
   version: string
   author: string
+  error?: string
 }
 
 export interface LxMusicSourceStatus {
@@ -164,14 +166,13 @@ export interface LxMusicSourceStatus {
   canImport: boolean
   installPath?: string
   dataPath?: string
-  selectedSourceId?: string
-  source?: LxMusicSourceSummary
+  sources: LxMusicSourceSummary[]
   message: string
 }
 
 export interface LxMusicImportResult {
-  source: CustomSourceInfo
-  alreadyImported: boolean
+  sources: Array<{ source: CustomSourceInfo; alreadyImported: boolean }>
+  failures: Array<{ id: string; name: string; message: string }>
 }
 
 export interface SourceCapability {
@@ -227,6 +228,7 @@ export interface AppSettings {
   overwriteExistingTags: boolean
   autoCheckUpdates: boolean
   closeBehavior: CloseBehavior
+  showMenuBarIcon: boolean
   menuBarLyrics: boolean
   lyricFontScale: number
   proxy: string

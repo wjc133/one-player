@@ -1,3 +1,30 @@
+interface PlaybackTrack {
+  source: string
+  id: string
+}
+
+export const playbackTrackKey = (track: PlaybackTrack): string =>
+  `${track.source}:${track.id}`
+
+export function getNextTrackAfterFailure<Track extends PlaybackTrack>(
+  queue: readonly Track[],
+  currentTrack: Track,
+  failedTrackKeys: ReadonlySet<string>,
+  wrap: boolean,
+): Track | null {
+  const currentKey = playbackTrackKey(currentTrack)
+  const currentIndex = queue.findIndex(
+    (track) => playbackTrackKey(track) === currentKey,
+  )
+  for (let offset = 1; offset <= queue.length; offset += 1) {
+    const nextIndex = currentIndex + offset
+    if (!wrap && nextIndex >= queue.length) break
+    const track = queue[nextIndex % queue.length]
+    if (!failedTrackKeys.has(playbackTrackKey(track))) return track
+  }
+  return null
+}
+
 export function getActiveLyricIndex(
   lines: ReadonlyArray<{ time: number }>,
   currentTime: number,

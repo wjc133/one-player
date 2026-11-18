@@ -1,6 +1,46 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { getActiveLyricIndex, seekAudio } from '../src/lib/playback.ts'
+import {
+  getActiveLyricIndex,
+  getNextTrackAfterFailure,
+  playbackTrackKey,
+  seekAudio,
+} from '../src/lib/playback.ts'
+
+test('failed tracks advance in queue order and consecutive failures are skipped', () => {
+  const queue = ['first', 'second', 'third'].map(id => ({ source: 'wy', id }))
+  const failed = new Set([playbackTrackKey(queue[0])])
+  assert.equal(getNextTrackAfterFailure(queue, queue[0], failed, false), queue[1])
+  failed.add(playbackTrackKey(queue[1]))
+  assert.equal(getNextTrackAfterFailure(queue, queue[0], failed, false), queue[2])
+  assert.equal(getNextTrackAfterFailure(queue, queue[1], failed, false), queue[2])
+})
+
+test('sequential failure recovery stops at the end without wrapping', () => {
+  const queue = ['first', 'last'].map(id => ({ source: 'wy', id }))
+  const failed = new Set([playbackTrackKey(queue[1])])
+  assert.equal(getNextTrackAfterFailure(queue, queue[1], failed, false), null)
+})
+
+test('looping and repeat-one failure recovery can wrap to a different track', () => {
+  const queue = ['first', 'last'].map(id => ({ source: 'wy', id }))
+  const failed = new Set([playbackTrackKey(queue[1])])
+  assert.equal(getNextTrackAfterFailure(queue, queue[1], failed, true), queue[0])
+})
+
+test('an entirely failed queue stops even with wrapping and duplicate tracks', () => {
+  const queue = ['first', 'first', 'second'].map(id => ({ source: 'wy', id }))
+  const failed = new Set(queue.map(playbackTrackKey))
+  assert.equal(getNextTrackAfterFailure(queue, queue[0], failed, true), null)
+  assert.equal(getNextTrackAfterFailure([queue[0]], queue[0], failed, true), null)
+  assert.equal(getNextTrackAfterFailure([], queue[0], failed, true), null)
+})
+
+test('tracks with the same ID on different platforms fail independently', () => {
+  const queue = [{ source: 'wy', id: 'same' }, { source: 'tx', id: 'same' }]
+  const failed = new Set([playbackTrackKey(queue[0])])
+  assert.equal(getNextTrackAfterFailure(queue, queue[0], failed, true), queue[1])
+})
 
 test('lyrics follow the actual timestamp without skipping closely spaced lines after seeking', () => {
   const lines = [{ time: 0 }, { time: 4 }, { time: 4.08 }, { time: 8 }]

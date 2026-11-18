@@ -38,3 +38,19 @@ test('same names and remote IDs from different platforms remain distinct', () =>
   assert.equal(second.length, 3)
   assert.equal(second[0], existing[0])
 })
+
+test('LX playlists retain mixed-platform identities and local paths across reimports', () => {
+  const incoming = playlist('default', [
+    track(1),
+    track(1, { id: 'kg_1', source: 'kg', hash: 'hash1' }),
+    track('local', { id: 'local_1', source: 'local', filePath: '/music/a.flac', isLocalLibrary: true }),
+  ])
+  const first = mergeImportedPlaylists([], 'lx', [incoming], 100)
+  const second = mergeImportedPlaylists(first, 'lx', [incoming], 200)
+  assert.equal(second.length, 1)
+  assert.equal(second[0].id, 'imported:lx:default')
+  assert.equal(second[0].tracks.length, 3)
+  assert.equal(second[0].tracks[1].hash, 'hash1')
+  assert.equal(second[0].tracks[2].filePath, '/music/a.flac')
+  assert.equal(second[0].importSource.platform, 'lx')
+})

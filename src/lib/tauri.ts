@@ -21,6 +21,12 @@ import type {
 export const setDesktopCloseBehavior = (behavior: CloseBehavior) =>
   invoke<void>('set_desktop_close_behavior', { behavior })
 
+export const setDesktopTrayVisible = (visible: boolean) =>
+  invoke<void>('set_desktop_tray_visible', { visible })
+
+export const openExternalUrl = (url: string) =>
+  invoke<void>('open_external_url', { url })
+
 export const completeWindowClose = (behavior: Exclude<CloseBehavior, 'ask'>) =>
   invoke<void>('complete_window_close', { behavior })
 
@@ -59,8 +65,8 @@ export const setCustomSourceUpdateAlert = (id: string, enabled: boolean) =>
 export const detectLxMusicSource = () =>
   invoke<LxMusicSourceStatus>('detect_lx_music_source')
 
-export const importLxMusicDefaultSource = () =>
-  invoke<LxMusicImportResult>('import_lx_music_default_source')
+export const importLxMusicSources = (sourceIds: string[]) =>
+  invoke<LxMusicImportResult>('import_lx_music_sources', { sourceIds })
 
 export const detectPlaylistImportPlatforms = () =>
   invoke<PlaylistImportPlatform[]>('detect_playlist_import_platforms')
