@@ -223,6 +223,7 @@ export type CloseBehavior = 'ask' | 'quit' | 'tray'
 export interface AppSettings {
   theme: 'dark' | 'light' | 'purple' | 'system'
   playQuality: Quality
+  songCacheSizeMb: number
   downloadDirectory: string
   downloadAlbumsOnFavorite: boolean
   overwriteExistingTags: boolean

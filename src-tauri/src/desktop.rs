@@ -38,6 +38,9 @@ pub struct TrayMenu {
 pub struct DesktopPlayback {
     track: Option<String>,
     is_playing: bool,
+    can_toggle: bool,
+    can_previous: bool,
+    can_next: bool,
     player_page_visible: bool,
     lyric: String,
     menu_bar_lyrics: bool,
@@ -321,7 +324,6 @@ fn refresh_desktop_playback(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     };
     let update = || -> tauri::Result<()> {
-        let has_track = payload.track.is_some();
         let track = payload.track.as_deref().unwrap_or("暂无播放");
         menu.track.set_text(single_line(track, 70))?;
         menu.toggle.set_text(if payload.is_playing {
@@ -329,9 +331,9 @@ fn refresh_desktop_playback(app: &AppHandle) -> Result<(), String> {
         } else {
             "播放"
         })?;
-        menu.toggle.set_enabled(has_track)?;
-        menu.previous.set_enabled(has_track)?;
-        menu.next.set_enabled(has_track)?;
+        menu.toggle.set_enabled(payload.can_toggle)?;
+        menu.previous.set_enabled(payload.can_previous)?;
+        menu.next.set_enabled(payload.can_next)?;
         menu.lyrics.set_checked(payload.menu_bar_lyrics)?;
         if let Some(tray) = app.tray_by_id(TRAY_ID) {
             let (visible, minimized) = match app.get_webview_window("main") {
@@ -383,6 +385,7 @@ mod tests {
             lyric: "当前歌词".into(),
             menu_bar_lyrics: true,
             player_page_visible: false,
+            ..Default::default()
         };
         assert_eq!(playback.menu_bar_lyric(true, false), "当前歌词");
         playback.player_page_visible = true;

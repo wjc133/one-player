@@ -8,6 +8,7 @@ mod lx_playlists;
 mod network;
 mod playlist_import;
 mod playlist_store;
+mod song_cache;
 mod source_store;
 mod walkman;
 
@@ -27,6 +28,7 @@ pub fn run() {
             source_store_lock: Mutex::new(()),
         })
         .manage(cover_cache::CoverCache::default())
+        .manage(song_cache::SongCache::default())
         .manage(desktop::DesktopState::default())
         .setup(|app| {
             desktop::setup(app)?;
@@ -51,6 +53,10 @@ pub fn run() {
             source_store::set_custom_source_update_alert,
             network::proxy_http_request,
             cover_cache::get_cached_cover,
+            song_cache::set_song_cache_limit,
+            song_cache::lookup_cached_song,
+            song_cache::store_cached_song,
+            song_cache::discard_cached_song,
             playlist_import::detect_playlist_import_platforms,
             playlist_import::list_import_playlists,
             playlist_import::import_platform_playlists,

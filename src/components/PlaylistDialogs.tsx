@@ -1,4 +1,4 @@
-import { CircleAlert, ListMusic, LoaderCircle, Merge, Pencil, X } from 'lucide-react'
+import { CircleAlert, ListMusic, LoaderCircle, Merge, Pencil, Trash2, X } from 'lucide-react'
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import type { PlayList } from '../types'
 import { PlaylistDestinationPicker } from './PlaylistDestinationPicker'
@@ -6,6 +6,8 @@ import { PlaylistDestinationPicker } from './PlaylistDestinationPicker'
 function PlaylistDialog(props: {
   title: string
   icon: ReactNode
+  danger?: boolean
+  descriptionId?: string
   busy: boolean
   onClose: () => void
   onSubmit: () => void
@@ -18,12 +20,13 @@ function PlaylistDialog(props: {
   useEffect(() => {
     const previous = document.activeElement
     const input = dialogRef.current?.querySelector<HTMLInputElement>('input')
-    if (input) { input.focus(); input.select() }
+    if (props.danger) dialogRef.current?.querySelector<HTMLButtonElement>('button.secondary-button')?.focus()
+    else if (input) { input.focus(); input.select() }
     else dialogRef.current?.focus()
     return () => {
       if (previous instanceof HTMLElement && previous.isConnected) previous.focus()
     }
-  }, [])
+  }, [props.danger])
 
   return (
     <div className="modal-backdrop" onClick={close}>
@@ -33,6 +36,7 @@ function PlaylistDialog(props: {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-describedby={props.descriptionId}
         aria-busy={props.busy}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
@@ -54,7 +58,7 @@ function PlaylistDialog(props: {
         <button type="button" className="modal-close" onClick={close} disabled={props.busy} aria-label={`关闭${props.title}`}>
           <X size={18} />
         </button>
-        <div className="modal-icon">{props.icon}</div>
+        <div className={`modal-icon${props.danger ? ' danger' : ''}`}>{props.icon}</div>
         <h2 id={titleId}>{props.title}</h2>
         {props.children}
       </form>
@@ -100,6 +104,57 @@ export function PlaylistRenameDialog(props: {
         <button type="submit" className="primary-button" disabled={busy || !name.trim()}>
           {busy && <LoaderCircle className="spin" size={15} />}
           {busy ? '保存中…' : '保存'}
+        </button>
+      </div>
+    </PlaylistDialog>
+  )
+}
+
+export function PlaylistDeleteDialog(props: {
+  playlist: PlayList
+  onDelete: () => Promise<void>
+  onClose: () => void
+}) {
+  const descriptionId = useId()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const busyRef = useRef(false)
+
+  async function submit() {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    setError('')
+    try {
+      await props.onDelete()
+      props.onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  return (
+    <PlaylistDialog
+      title="删除歌单"
+      icon={<Trash2 size={22} />}
+      danger
+      descriptionId={descriptionId}
+      busy={busy}
+      onClose={props.onClose}
+      onSubmit={() => void submit()}
+    >
+      <p id={descriptionId} className="playlist-delete-description">
+        确定删除「{props.playlist.name}」？此操作不可撤销，音频文件会保留。
+      </p>
+      {error && <div className="playlist-import-error" role="alert"><CircleAlert size={16} /><span>{error}</span></div>}
+      <div className="modal-actions">
+        <button type="button" className="secondary-button" onClick={props.onClose} disabled={busy}>取消</button>
+        <button type="submit" className="primary-button danger" disabled={busy}>
+          {busy && <LoaderCircle className="spin" size={15} />}
+          {busy ? '删除中…' : '删除歌单'}
         </button>
       </div>
     </PlaylistDialog>

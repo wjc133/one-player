@@ -13,6 +13,7 @@ import type {
   ImportPlaylistCatalog,
   PlaylistImportResult,
   PlayList,
+  Quality,
   WalkmanDevice,
   WalkmanLibrary,
   WalkmanTrack,
@@ -33,10 +34,33 @@ export const completeWindowClose = (behavior: Exclude<CloseBehavior, 'ask'>) =>
 export const updateDesktopPlayback = (payload: {
   track: string | null
   isPlaying: boolean
+  canToggle: boolean
+  canPrevious: boolean
+  canNext: boolean
   playerPageVisible: boolean
   lyric: string
   menuBarLyrics: boolean
 }) => invoke<void>('update_desktop_playback', { payload })
+
+let songCacheOperation: Promise<unknown> = Promise.resolve()
+
+function updateSongCache<T>(operation: () => Promise<T>): Promise<T> {
+  const result = songCacheOperation.then(operation, operation)
+  songCacheOperation = result
+  return result
+}
+
+export const setSongCacheLimit = (sizeMb: number) =>
+  updateSongCache(() => invoke<void>('set_song_cache_limit', { sizeMb }))
+
+export const lookupCachedSong = (key: string | null) =>
+  updateSongCache(() => invoke<{ url: string; quality: Quality } | null>('lookup_cached_song', { key }))
+
+export const discardCachedSong = (key: string) =>
+  updateSongCache(() => invoke<void>('discard_cached_song', { key }))
+
+export const storeCachedSong = (payload: { key: string; url: string; quality: Quality; proxy?: string }) =>
+  invoke<void>('store_cached_song', { payload })
 
 export const listCustomSources = () =>
   invoke<CustomSourceInfo[]>('list_custom_sources')

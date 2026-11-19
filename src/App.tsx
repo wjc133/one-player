@@ -49,6 +49,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
+import { isTauri } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type {
@@ -102,13 +103,18 @@ import { mergePlaylists, mergeTracksIntoPlaylist, renamePlaylist } from './lib/p
 import { LibraryNavigation } from './components/LibraryNavigation'
 import { PlaylistImportModal } from './components/PlaylistImportModal'
 import { PlaylistActionMenu } from './components/PlaylistActionMenu'
-import { PlaylistMergeDialog, PlaylistRenameDialog } from './components/PlaylistDialogs'
+import {
+  PlaylistDeleteDialog,
+  PlaylistMergeDialog,
+  PlaylistRenameDialog,
+} from './components/PlaylistDialogs'
 import { LxSourceImportModal } from './components/LxSourceImportModal'
 import { CachedCover, CoverCacheProvider, useCoverUrl } from './components/CachedCover'
 import { resolveCoverUrl } from './lib/coverCache'
 import { getStorageWarning, localStore, subscribeStorageWarning } from './lib/storage'
 import {
   deleteDownload,
+  discardCachedSong,
   detectLxMusicSource,
   detectWalkman,
   transferWalkmanFile,
@@ -125,12 +131,15 @@ import {
   openExternalUrl,
   listDownloads,
   listCustomSources,
+  lookupCachedSong,
   removeCustomSource,
   requestHttp,
   setCustomSourceUpdateAlert,
   updateCustomSourceScript,
   loadStoredPlaylists,
   saveStoredPlaylists,
+  setSongCacheLimit,
+  storeCachedSong,
 } from './lib/tauri'
 
 type View = 'search' | 'library' | 'downloads' | 'walkman' | 'settings'
@@ -174,10 +183,19 @@ interface LyricLine {
 const MIN_LYRIC_FONT_SCALE = 80
 const MAX_LYRIC_FONT_SCALE = 150
 const LYRIC_FONT_SCALE_STEP = 10
+const MAX_SONG_CACHE_SIZE_MB = 0xffffffff
+
+type PlaybackAudioSource = {
+  requestId: number
+  url: string
+  cachedKey?: string
+  cacheWrite?: { key: string; quality: Quality; proxy?: string }
+}
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   playQuality: '320k',
+  songCacheSizeMb: 512,
   downloadDirectory: '',
   downloadAlbumsOnFavorite: false,
   overwriteExistingTags: true,
@@ -214,6 +232,13 @@ const loadSettings = (): AppSettings => {
   }
   if (!['ask', 'quit', 'tray'].includes(settings.closeBehavior)) {
     settings.closeBehavior = 'ask'
+  }
+  if (
+    !Number.isInteger(settings.songCacheSizeMb) ||
+    settings.songCacheSizeMb < 0 ||
+    settings.songCacheSizeMb > MAX_SONG_CACHE_SIZE_MB
+  ) {
+    settings.songCacheSizeMb = DEFAULT_SETTINGS.songCacheSizeMb
   }
   settings.lyricFontScale =
     typeof settings.lyricFontScale === 'number' && Number.isFinite(settings.lyricFontScale)
@@ -493,7 +518,7 @@ function App() {
 
   const [playlists, setPlaylists] = useState<PlayList[]>(loadPlaylists)
   const playlistsRef = useRef(playlists)
-  const playlistSaveQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const playlistSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve())
   const [playlistStorageReady, setPlaylistStorageReady] = useState(false)
   const [playlistStorageError, setPlaylistStorageError] = useState('')
   const [activePlaylistId, setActivePlaylistId] = useState('default')
@@ -506,6 +531,7 @@ function App() {
   const [playlistMenu, setPlaylistMenu] = useState<{ playlistId: string; x: number; y: number } | null>(null)
   const [playlistToRename, setPlaylistToRename] = useState<PlayList | null>(null)
   const [playlistToMerge, setPlaylistToMerge] = useState<PlayList | null>(null)
+  const [playlistToDelete, setPlaylistToDelete] = useState<PlayList | null>(null)
   const [newPlaylistName, setNewPlaylistName] = useState('')
   const [localMusicImporting, setLocalMusicImporting] = useState(false)
   const [legacyDownloads] = useState<LegacyDownloadItem[]>(() =>
@@ -556,10 +582,7 @@ function App() {
   >(new Set())
   const [currentTrack, setCurrentTrack] = useState<MusicTrack | null>(null)
   const [currentQuality, setCurrentQuality] = useState<Quality>('320k')
-  const [audioSource, setAudioSource] = useState<{
-    requestId: number
-    url: string
-  } | null>(null)
+  const [audioSource, setAudioSource] = useState<PlaybackAudioSource | null>(null)
   const playbackRequestRef = useRef(0)
   const playbackAttemptRef = useRef<{
     requestId: number
@@ -789,6 +812,13 @@ function App() {
   }, [settings])
 
   useEffect(() => {
+    if (!isTauri()) return
+    void setSongCacheLimit(settings.songCacheSizeMb).catch((error) => {
+      console.warn('设置歌曲缓存容量失败', error)
+    })
+  }, [settings.songCacheSizeMb])
+
+  useEffect(() => {
     queueRef.current = queue
   }, [queue])
 
@@ -797,8 +827,17 @@ function App() {
     localStore.setItem(PLAYBACK_MODE_STORAGE_KEY, playbackMode)
   }, [playbackMode])
 
-  function persistPlaylists(next: PlayList[]) {
-    const pending = playlistSaveQueueRef.current.catch(() => {}).then(() => saveStoredPlaylists(next))
+  function savePlaylistChange(update: (current: PlayList[]) => PlayList[]) {
+    const pending = playlistSaveQueueRef.current.catch(() => {}).then(async () => {
+      const current = playlistsRef.current
+      const next = update(current)
+      if (next !== current) {
+        await saveStoredPlaylists(next)
+        playlistsRef.current = next
+        setPlaylists(next)
+      }
+      return next
+    })
     playlistSaveQueueRef.current = pending
     return pending
   }
@@ -807,11 +846,11 @@ function App() {
     let active = true
     void loadStoredPlaylists().then(async (saved) => {
       if (!active) return
-      if (saved) {
-        playlistsRef.current = saved.length ? saved : loadPlaylists()
-        setPlaylists(playlistsRef.current)
+      if (saved !== null) {
+        playlistsRef.current = saved
+        setPlaylists(saved)
       } else {
-        await persistPlaylists(playlistsRef.current)
+        await saveStoredPlaylists(playlistsRef.current)
       }
       if (!active) return
       localStore.removeItem('one-player:playlists')
@@ -822,12 +861,6 @@ function App() {
     })
     return () => { active = false }
   }, [])
-
-  useEffect(() => {
-    playlistsRef.current = playlists
-    if (!playlistStorageReady) return
-    void persistPlaylists(playlists).catch((error) => showToast(`保存歌单失败：${String(error)}`))
-  }, [playlists, playlistStorageReady])
 
   useEffect(() => {
     if (!playlistStorageReady) return
@@ -848,7 +881,7 @@ function App() {
         const tracksByPath = new Map(
           metadata.map((item) => [item.path, localMusicTrack(item)]),
         )
-        setPlaylists((current) =>
+        return savePlaylistChange((current) =>
           current.map((playlist) => ({
             ...playlist,
             tracks: playlist.tracks.map((track) =>
@@ -1009,10 +1042,14 @@ function App() {
       .then(() => {
         if (!cancelled && requestId === playbackRequestRef.current) {
           setIsPlaying(!audio.paused)
+          if (audioSource.cacheWrite) {
+            void storeCachedSong({ url: audioSource.url, ...audioSource.cacheWrite })
+              .catch((error) => console.debug('写入歌曲缓存失败', error))
+          }
         }
       })
       .catch((error) => {
-        if (!cancelled) handlePlaybackFailure(requestId, error)
+        if (!cancelled) handleAudioError(audioSource, error)
       })
     return () => {
       cancelled = true
@@ -1503,6 +1540,64 @@ function App() {
     }
   }
 
+  async function loadPlaybackAudio(
+    track: MusicTrack,
+    requestId: number,
+    cacheKey: string | null,
+    retryFromNetwork = false,
+  ) {
+    try {
+      if (retryFromNetwork && cacheKey) {
+        await discardCachedSong(cacheKey).catch((error) => console.debug('移除歌曲缓存失败', error))
+      } else if (isTauri()) {
+        const cached = await lookupCachedSong(cacheKey).catch((error) => {
+          console.debug('读取歌曲缓存失败', error)
+          return null
+        })
+        if (requestId !== playbackRequestRef.current) return
+        if (cached && cacheKey) {
+          setCurrentQuality(cached.quality)
+          setAudioSource({ requestId, url: cached.url, cachedKey: cacheKey })
+          return
+        }
+      }
+      if (requestId !== playbackRequestRef.current) return
+      const resolved = await resolveTrackUrl(track)
+      if (requestId !== playbackRequestRef.current) return
+      setCurrentQuality(resolved.quality)
+      setAudioSource({
+        requestId,
+        url: resolved.url,
+        cacheWrite: cacheKey ? {
+          key: cacheKey,
+          quality: resolved.quality,
+          proxy: settingsRef.current.proxy || undefined,
+        } : undefined,
+      })
+    } catch (error) {
+      handlePlaybackFailure(requestId, error)
+    } finally {
+      if (requestId === playbackRequestRef.current) setIsResolving(false)
+    }
+  }
+
+  function handleAudioError(source: PlaybackAudioSource, error: unknown) {
+    if (source.requestId !== playbackRequestRef.current) return
+    if (error instanceof Error && error.name === 'AbortError') return
+    const attempt = playbackAttemptRef.current
+    if (source.cachedKey && attempt && !(error instanceof Error && error.name === 'NotAllowedError')) {
+      const requestId = ++playbackRequestRef.current
+      playbackAttemptRef.current = { ...attempt, requestId }
+      cancelPlaybackFade()
+      setAudioSource(null)
+      setIsPlaying(false)
+      setIsResolving(true)
+      void loadPlaybackAudio(attempt.track, requestId, source.cachedKey, true)
+      return
+    }
+    handlePlaybackFailure(source.requestId, error)
+  }
+
   async function playTrack(
     track: MusicTrack,
     list: MusicTrack[] = queueRef.current,
@@ -1552,16 +1647,10 @@ function App() {
         if (artworkRequestId === artworkRequestRef.current) setArtwork(url)
       })
       .catch(() => {})
-    try {
-      const resolved = await resolveTrackUrl(track)
-      if (requestId !== playbackRequestRef.current) return
-      setCurrentQuality(resolved.quality)
-      setAudioSource({ requestId, url: resolved.url })
-    } catch (error) {
-      handlePlaybackFailure(requestId, error)
-    } finally {
-      if (requestId === playbackRequestRef.current) setIsResolving(false)
-    }
+    const cacheKey = !track.filePath && isTauri() && settings.songCacheSizeMb > 0 && activeSourceId
+      ? JSON.stringify([activeSourceId, playbackTrackKey(track), settings.playQuality])
+      : null
+    await loadPlaybackAudio(track, requestId, cacheKey)
   }
 
   function playAdjacent(direction: 1 | -1, trigger: 'manual' | 'ended') {
@@ -1626,10 +1715,31 @@ function App() {
     }
   }
 
-  function togglePlayback() {
-    if (!audioRef.current) return
+  function setPlaybackImmediately(playing?: boolean) {
+    const audio = audioRef.current
+    if (!audio || isResolving) return
 
-    if (!audioSource && currentTrack && !isResolving) {
+    const shouldPlay = playing ?? (audio.paused || audioFadeDirectionRef.current === 'out')
+    cancelPlaybackFade()
+    audio.volume = volumeRef.current
+    if (!shouldPlay) {
+      audio.pause()
+    } else if (audioSource) {
+      if (audio.paused) void audio.play().catch((error) => handleAudioError(audioSource, error))
+    } else if (currentTrack) {
+      void playTrack(currentTrack)
+    }
+  }
+
+  function togglePlayback() {
+    if (document.hidden) {
+      setPlaybackImmediately()
+      return
+    }
+    const audio = audioRef.current
+    if (!audio || isResolving) return
+
+    if (!audioSource && currentTrack) {
       void playTrack(currentTrack)
       return
     }
@@ -1650,10 +1760,9 @@ function App() {
       return
     }
 
-    if (audioRef.current.paused) {
+    if (audio.paused) {
       const requestId = playbackRequestRef.current
-      const audio = audioRef.current
-      audioRef.current.volume = 0
+      audio.volume = 0
       void audio
         .play()
         .then(() => {
@@ -1665,7 +1774,7 @@ function App() {
         .catch((error) => {
           if (requestId !== playbackRequestRef.current) return
           audio.volume = volumeRef.current
-          handlePlaybackFailure(requestId, error)
+          if (audioSource) handleAudioError(audioSource, error)
         })
     } else {
       fadeAudioVolume(0, 'out', () => {
@@ -1691,7 +1800,7 @@ function App() {
     setDuration(Number.isFinite(audio.duration) ? audio.duration : 0)
   }
 
-  function createPlaylist(rawName: string, track?: MusicTrack) {
+  async function createPlaylist(rawName: string, track?: MusicTrack) {
     if (!playlistStorageReady) {
       showToast(playlistStorageError || '正在加载本机歌单，请稍候')
       return false
@@ -1699,42 +1808,52 @@ function App() {
     const name = rawName.trim()
     if (!name) return false
 
-    if (playlists.some((playlist) => playlist.name === name)) {
-      showToast('已存在同名列表')
-      return false
-    }
-
     const playlist = {
       id: crypto.randomUUID(),
       name,
       tracks: track ? [track] : [],
       createdAt: Date.now(),
     }
-    setPlaylists((current) => [...current, playlist])
+    try {
+      await savePlaylistChange((current) => {
+        if (current.some((item) => item.name === name)) throw new Error('已存在同名列表')
+        return [...current, playlist]
+      })
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error))
+      return false
+    }
     setActivePlaylistId(playlist.id)
     return true
   }
 
-  async function savePlaylistChange(next: PlayList[]) {
-    await persistPlaylists(next)
-    playlistsRef.current = next
-    setPlaylists(next)
-  }
-
   async function handleRenamePlaylist(playlistId: string, name: string) {
-    const next = renamePlaylist(playlistsRef.current, playlistId, name)
-    await savePlaylistChange(next)
+    await savePlaylistChange((current) => renamePlaylist(current, playlistId, name))
     showToast('歌单已重命名')
   }
 
   async function handleMergePlaylist(sourceId: string, targetId: string) {
-    const existing = playlistsRef.current
-    const target = existing.find((playlist) => playlist.id === targetId)
-    const next = mergePlaylists(existing, sourceId, targetId)
+    let previousCount = 0
+    const next = await savePlaylistChange((current) => {
+      previousCount = current.find((playlist) => playlist.id === targetId)?.tracks.length ?? 0
+      return mergePlaylists(current, sourceId, targetId)
+    })
     const merged = next.find((playlist) => playlist.id === targetId)!
-    await savePlaylistChange(next)
     setActivePlaylistId(targetId)
-    showToast(`已合并到「${merged.name}」，新增 ${merged.tracks.length - (target?.tracks.length ?? 0)} 首歌曲`)
+    showToast(`已合并到「${merged.name}」，新增 ${merged.tracks.length - previousCount} 首歌曲`)
+  }
+
+  async function handleDeletePlaylist(playlistId: string) {
+    let deletedIndex = -1
+    const next = await savePlaylistChange((current) => {
+      deletedIndex = current.findIndex((playlist) => playlist.id === playlistId)
+      if (deletedIndex === -1) throw new Error('歌单不存在')
+      return current.filter((playlist) => playlist.id !== playlistId)
+    })
+    setActivePlaylistId((current) =>
+      current === playlistId ? next[deletedIndex]?.id ?? next.at(-1)?.id ?? '' : current,
+    )
+    showToast('歌单已删除')
   }
 
   function openPlaylistContextMenu(playlistId: string, event: MouseEvent<HTMLButtonElement>) {
@@ -1751,14 +1870,14 @@ function App() {
   }
 
   async function importPlaylists(source: PlaylistImportSource, incoming: ImportedPlaylist[], targetId?: string) {
-    const existing = playlistsRef.current
-    const next = targetId
-      ? mergeTracksIntoPlaylist(existing, targetId, incoming.flatMap((playlist) => playlist.tracks))
-      : mergeImportedPlaylists(existing, source, incoming)
-    await savePlaylistChange(next)
+    let previousCount = 0
+    const next = await savePlaylistChange((current) => {
+      if (!targetId) return mergeImportedPlaylists(current, source, incoming)
+      previousCount = current.find((playlist) => playlist.id === targetId)?.tracks.length ?? 0
+      return mergeTracksIntoPlaylist(current, targetId, incoming.flatMap((playlist) => playlist.tracks))
+    })
     if (targetId) {
       const target = next.find((playlist) => playlist.id === targetId)!
-      const previousCount = existing.find((playlist) => playlist.id === targetId)!.tracks.length
       setActivePlaylistId(targetId)
       showToast(`已将 ${incoming.length} 个歌单合并到「${target.name}」，新增 ${target.tracks.length - previousCount} 首歌曲`)
       return
@@ -1793,17 +1912,18 @@ function App() {
       const selectedByPath = new Map(
         localTracks.map((track) => [track.filePath, track]),
       )
-      const existingPaths = new Set(
-        activePlaylist.tracks
-          .filter((track) => track.isLocalLibrary)
-          .map((track) => track.filePath),
-      )
-      const additions = localTracks.filter(
-        (track) => !existingPaths.has(track.filePath),
-      )
-      setPlaylists((current) =>
-        current.map((playlist) => {
+      let addedCount = 0
+      await savePlaylistChange((current) => {
+        if (!current.some((playlist) => playlist.id === activePlaylist.id)) {
+          throw new Error('歌单已删除')
+        }
+        return current.map((playlist) => {
           if (playlist.id !== activePlaylist.id) return playlist
+          const existingPaths = new Set(
+            playlist.tracks.filter((track) => track.isLocalLibrary).map((track) => track.filePath),
+          )
+          const additions = localTracks.filter((track) => !existingPaths.has(track.filePath))
+          addedCount = additions.length
           const refreshedTracks = playlist.tracks.map((track) =>
             track.isLocalLibrary && selectedByPath.has(track.filePath)
               ? selectedByPath.get(track.filePath)!
@@ -1813,11 +1933,11 @@ function App() {
             ...playlist,
             tracks: [...refreshedTracks, ...additions],
           }
-        }),
-      )
+        })
+      })
       showToast(
-        additions.length
-          ? `已添加 ${additions.length} 首本地音乐`
+        addedCount
+          ? `已添加 ${addedCount} 首本地音乐`
           : `已刷新 ${localTracks.length} 首本地音乐信息`,
       )
     } catch (error) {
@@ -1836,7 +1956,7 @@ function App() {
       showToast(playlistStorageError || '正在加载本机歌单，请稍候')
       return
     }
-    setPlaylists((current) =>
+    void savePlaylistChange((current) =>
       current.map((playlist) => {
         if (playlist.id !== playlistId) return playlist
         const exists = playlist.tracks.some((item) => isSameTrack(item, track))
@@ -1847,7 +1967,7 @@ function App() {
             : [track, ...playlist.tracks],
         }
       }),
-    )
+    ).catch((error) => showToast(`保存歌单失败：${String(error)}`))
   }
 
   function toggleFavoriteAlbum(detail: AlbumDetail) {
@@ -2328,16 +2448,22 @@ function App() {
     albumDownloadsInProgress.size > 0 ||
     downloadTasks.some((task) => task.status === 'downloading')
 
+  const trackQueueIndex = currentTrack ? queue.findIndex((track) => isSameTrack(track, currentTrack)) : -1
   const desktop = useDesktopIntegration({
     settings,
     setSettings,
     track: currentTrack ? `${currentTrack.name} · ${currentTrack.singer}` : null,
     isPlaying,
+    canToggle: currentTrack !== null && !isResolving,
+    canPrevious: trackQueueIndex >= 0 && (playbackMode !== 'sequence' || trackQueueIndex > 0),
+    canNext: trackQueueIndex >= 0 && (playbackMode !== 'sequence' || trackQueueIndex < queue.length - 1),
     playerPageOpen: playerOpen,
     lyric: lyricLines[activeLyricIndex]?.text ?? '',
-    onToggle: togglePlayback,
+    onToggle: () => setPlaybackImmediately(),
+    onSetPlaying: setPlaybackImmediately,
     onPrevious: () => playAdjacent(-1, 'manual'),
     onNext: () => playAdjacent(1, 'manual'),
+    onSeek: seekTo,
     onSettings: () => {
       closePlayerPage()
       setView('settings')
@@ -2375,8 +2501,8 @@ function App() {
         onError={(event) => {
           const error = event.currentTarget.error
           if (!audioSource || !error) return
-          handlePlaybackFailure(
-            audioSource.requestId,
+          handleAudioError(
+            audioSource,
             new Error(error.message || `音频加载或解码失败（错误码 ${error.code}）`),
           )
         }}
@@ -2605,39 +2731,41 @@ function App() {
                   }}
                 />
                 <div className="library-detail" key={activePlaylistId}>
-                  <div className="library-detail-heading">
-                    <div>
-                      <span className="eyebrow">{showingFavoriteAlbums ? 'ALBUMS' : activePlaylist?.importSource ? activePlaylist.importSource.platform === 'lx' ? 'LX Music' : providerNames[activePlaylist.importSource.platform] : 'PLAYLIST'}</span>
-                      <h2>{showingFavoriteAlbums ? '专辑收藏' : activePlaylist?.name}</h2>
-                      <p>{showingFavoriteAlbums ? `${favoriteAlbums.length} 张专辑` : `${activePlaylist?.tracks.length ?? 0} 首歌曲`}</p>
-                    </div>
-                    {!showingFavoriteAlbums && activePlaylist && (
-                      <div className="library-detail-actions">
-                        <button
-                          className="secondary-button library-local-button"
-                          onClick={() => void importLocalMusicToPlaylist()}
-                          disabled={localMusicImporting}
-                        >
-                          <FolderOpen size={15} />
-                          {localMusicImporting ? '添加中…' : '添加本地音乐'}
-                        </button>
-                        <button
-                          className="secondary-button library-more-button"
-                          aria-label="歌单更多操作"
-                          title="歌单更多操作"
-                          aria-haspopup="menu"
-                          aria-expanded={playlistMenu?.playlistId === activePlaylist.id}
-                          disabled={!playlistStorageReady || localMusicImporting}
-                          onClick={(event) => {
-                            const bounds = event.currentTarget.getBoundingClientRect()
-                            setPlaylistMenu({ playlistId: activePlaylist.id, x: bounds.right - 190, y: bounds.bottom + 6 })
-                          }}
-                        >
-                          <MoreVertical size={17} />
-                        </button>
+                  {(showingFavoriteAlbums || activePlaylist) && (
+                    <div className="library-detail-heading">
+                      <div>
+                        <span className="eyebrow">{showingFavoriteAlbums ? 'ALBUMS' : activePlaylist?.importSource ? activePlaylist.importSource.platform === 'lx' ? 'LX Music' : providerNames[activePlaylist.importSource.platform] : 'PLAYLIST'}</span>
+                        <h2>{showingFavoriteAlbums ? '专辑收藏' : activePlaylist?.name}</h2>
+                        <p>{showingFavoriteAlbums ? `${favoriteAlbums.length} 张专辑` : `${activePlaylist?.tracks.length ?? 0} 首歌曲`}</p>
                       </div>
-                    )}
-                  </div>
+                      {!showingFavoriteAlbums && activePlaylist && (
+                        <div className="library-detail-actions">
+                          <button
+                            className="secondary-button library-local-button"
+                            onClick={() => void importLocalMusicToPlaylist()}
+                            disabled={localMusicImporting}
+                          >
+                            <FolderOpen size={15} />
+                            {localMusicImporting ? '添加中…' : '添加本地音乐'}
+                          </button>
+                          <button
+                            className="secondary-button library-more-button"
+                            aria-label="歌单更多操作"
+                            title="歌单更多操作"
+                            aria-haspopup="menu"
+                            aria-expanded={playlistMenu?.playlistId === activePlaylist.id}
+                            disabled={!playlistStorageReady || localMusicImporting}
+                            onClick={(event) => {
+                              const bounds = event.currentTarget.getBoundingClientRect()
+                              setPlaylistMenu({ playlistId: activePlaylist.id, x: bounds.right - 190, y: bounds.bottom + 6 })
+                            }}
+                          >
+                            <MoreVertical size={17} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
               {showingFavoriteAlbums ? (
                 favoriteAlbums.length ? (
                   <div className="album-grid library-album-grid">
@@ -2681,7 +2809,13 @@ function App() {
                     }}
                   />
                 )
-              ) : activePlaylist?.tracks.length ? (
+              ) : !activePlaylist ? (
+                <EmptyState
+                  icon={<ListMusic size={30} />}
+                  title="还没有歌单"
+                  description="新建或导入歌单后，就可以把歌曲加进来。"
+                />
+              ) : activePlaylist.tracks.length ? (
                 <TrackTable
                   tracks={activePlaylist.tracks}
                   favorites={favoriteTracks}
@@ -2696,7 +2830,7 @@ function App() {
               ) : (
                 <EmptyState
                   icon={<Heart size={30} />}
-                  title={`「${activePlaylist?.name ?? '我的收藏'}」还是空的`}
+                  title={`「${activePlaylist.name}」还是空的`}
                   description="在搜索结果中点击心形按钮，选择要加入的列表。"
                   action="添加本地音乐"
                   onAction={() => void importLocalMusicToPlaylist()}
@@ -2788,7 +2922,7 @@ function App() {
         onDownload={() => {
           if (currentTrack) requestTrackDownload(currentTrack)
         }}
-        onToggle={togglePlayback}
+        onToggle={() => togglePlayback()}
         onPrevious={() => playAdjacent(-1, 'manual')}
         onNext={() => playAdjacent(1, 'manual')}
         playbackMode={playbackMode}
@@ -2830,7 +2964,7 @@ function App() {
           downloadState={getTrackDownloadState(currentTrack)}
           onDownload={() => requestTrackDownload(currentTrack)}
           onFavorite={() => setPlaylistPickerTrack(currentTrack)}
-          onToggle={togglePlayback}
+          onToggle={() => togglePlayback()}
           onPrevious={() => playAdjacent(-1, 'manual')}
           onNext={() => playAdjacent(1, 'manual')}
           playbackMode={playbackMode}
@@ -2975,9 +3109,9 @@ function App() {
             onClick={(event) => event.stopPropagation()}
             onSubmit={(event) => {
               event.preventDefault()
-              if (createPlaylist(newPlaylistName)) {
-                setPlaylistCreateOpen(false)
-              }
+              void createPlaylist(newPlaylistName).then((created) => {
+                if (created) setPlaylistCreateOpen(false)
+              })
             }}
           >
             <button
@@ -3038,6 +3172,7 @@ function App() {
           onClose={() => setPlaylistMenu(null)}
           onRename={() => { setPlaylistMenu(null); setPlaylistToRename(menuPlaylist) }}
           onMerge={() => { setPlaylistMenu(null); setPlaylistToMerge(menuPlaylist) }}
+          onDelete={() => { setPlaylistMenu(null); setPlaylistToDelete(menuPlaylist) }}
         />
       )}
 
@@ -3057,6 +3192,15 @@ function App() {
           playlists={playlists}
           onMerge={(targetId) => handleMergePlaylist(playlistToMerge.id, targetId)}
           onClose={() => setPlaylistToMerge(null)}
+        />
+      )}
+
+      {playlistToDelete && (
+        <PlaylistDeleteDialog
+          key={playlistToDelete.id}
+          playlist={playlistToDelete}
+          onDelete={() => handleDeletePlaylist(playlistToDelete.id)}
+          onClose={() => setPlaylistToDelete(null)}
         />
       )}
 
@@ -3604,7 +3748,7 @@ interface PlaylistPickerProps {
   track: MusicTrack
   playlists: PlayList[]
   onToggle: (playlistId: string) => void
-  onCreate: (name: string, track: MusicTrack) => void
+  onCreate: (name: string, track: MusicTrack) => Promise<boolean>
   onClose: () => void
 }
 
@@ -3650,8 +3794,9 @@ function PlaylistPicker(props: PlaylistPickerProps) {
           className="playlist-create-form"
           onSubmit={(event) => {
             event.preventDefault()
-            props.onCreate(newPlaylistName, props.track)
-            setNewPlaylistName('')
+            void props.onCreate(newPlaylistName, props.track).then((created) => {
+              if (created) setNewPlaylistName((current) => current === newPlaylistName ? '' : current)
+            })
           }}
         >
           <input
@@ -3932,6 +4077,33 @@ function SettingsView(props: SettingsViewProps) {
                 </option>
               ))}
             </select>
+          </SettingRow>
+          <SettingRow
+            label="歌曲缓存容量（MB）"
+            description="重复播放优先读取本机缓存，空间不足时优先淘汰播放次数最少的歌曲。设为 0 MB 可关闭。"
+          >
+            <input
+              key={props.settings.songCacheSizeMb}
+              className="setting-input"
+              aria-label="歌曲缓存容量（MB）"
+              title="歌曲缓存容量（MB）"
+              type="number"
+              min={0}
+              max={MAX_SONG_CACHE_SIZE_MB}
+              step={1}
+              defaultValue={props.settings.songCacheSizeMb}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') event.currentTarget.blur()
+              }}
+              onBlur={(event) => {
+                const size = event.currentTarget.valueAsNumber
+                if (!Number.isInteger(size) || size < 0 || size > MAX_SONG_CACHE_SIZE_MB) {
+                  event.currentTarget.value = String(props.settings.songCacheSizeMb)
+                  return
+                }
+                props.setSettings((current) => ({ ...current, songCacheSizeMb: size }))
+              }}
+            />
           </SettingRow>
           <SettingRow
             label="点击关闭按钮时"

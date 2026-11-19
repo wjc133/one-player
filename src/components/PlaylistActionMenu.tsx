@@ -1,4 +1,4 @@
-import { Merge, Pencil } from 'lucide-react'
+import { Merge, Pencil, Trash2 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { PlayList } from '../types'
@@ -9,6 +9,7 @@ interface PlaylistActionMenuProps {
   y: number
   onRename: () => void
   onMerge: () => void
+  onDelete: () => void
   onClose: () => void
 }
 
@@ -18,6 +19,7 @@ export function PlaylistActionMenu({
   y,
   onRename,
   onMerge,
+  onDelete,
   onClose,
 }: PlaylistActionMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
@@ -73,6 +75,7 @@ export function PlaylistActionMenu({
         <strong>{playlist.name}</strong>
         <button role="menuitem" onClick={onRename}><Pencil size={15} /><span>重命名</span></button>
         <button role="menuitem" onClick={onMerge}><Merge size={15} /><span>合并到…</span></button>
+        <button role="menuitem" className="danger" onClick={onDelete}><Trash2 size={15} /><span>删除歌单…</span></button>
       </div>
     </div>,
     document.body,

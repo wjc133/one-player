@@ -214,6 +214,18 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable]:not([contenteditable='false']) {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 html,
 body,
 #root {
@@ -1717,6 +1729,8 @@ button.track-album:disabled {
 .playlist-action-menu > button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left; font-size: 12px; cursor: pointer; }
 .playlist-action-menu > button:hover, .playlist-action-menu > button:focus-visible { outline: 0; background: var(--accent-soft); }
 .playlist-action-menu > button svg { color: var(--accent); }
+.playlist-action-menu > button.danger, .playlist-action-menu > button.danger svg { color: var(--danger); }
+.playlist-action-menu > button.danger:hover, .playlist-action-menu > button.danger:focus-visible { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .library-detail .track-table-head,
 .library-detail .track-row { grid-template-columns: 28px minmax(145px, 1.4fr) minmax(70px, .7fr) 50px 42px 60px; column-gap: 7px; padding-inline: 10px; }
 .library-detail .track-actions { gap: 2px; }
@@ -3397,7 +3411,7 @@ input[type='range'] {
 .modal-card.playlist-edit-modal { display: flex; flex-direction: column; width: min(480px, 100%); max-height: calc(100vh - 40px); overflow: auto; }
 .playlist-edit-modal > .modal-icon, .playlist-edit-modal > h2, .playlist-edit-modal > .modal-actions { flex-shrink: 0; }
 .playlist-name-label { display: flex; flex-direction: column; gap: 10px; margin-top: 22px; color: var(--muted); font-size: 12px; }
-.playlist-edit-modal .playlist-merge-description { margin: 18px 0; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.playlist-edit-modal .playlist-merge-description, .playlist-edit-modal .playlist-delete-description { margin: 18px 0; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
 .playlist-edit-modal .playlist-merge-help { display: flex; align-items: center; gap: 7px; margin: 15px 0 0; color: var(--muted); font-size: 11px; }
 .playlist-merge-help > svg { flex-shrink: 0; color: var(--accent); }
 
