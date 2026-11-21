@@ -11,19 +11,23 @@ import {
   Library,
   ListEnd,
   ListMusic,
+  ListPlus,
   LoaderCircle,
   Maximize2,
+  Merge,
   Minimize2,
   Minus,
   MoreHorizontal,
   MoreVertical,
   Music2,
   Pause,
+  Pencil,
   Play,
   Plus,
   Repeat,
   Repeat1,
   RefreshCw,
+  ScanLine,
   Search,
   Settings,
   Shuffle,
@@ -60,7 +64,6 @@ import type {
   AlbumDetail,
   AlbumSummary,
   AppSettings,
-  CloseBehavior,
   CustomSourceInfo,
   DownloadedAudio,
   DownloadProgress,
@@ -75,6 +78,7 @@ import type {
   OnlineSourceKey,
   PlayList,
   Quality,
+  RangeLoopUnit,
   SavedAlbum,
   SourceCapabilities,
   SourceStatus,
@@ -98,15 +102,26 @@ import { useDesktopIntegration } from './lib/useDesktopIntegration'
 import {
   getActiveLyricIndex,
   getNextTrackAfterFailure,
+  insertTrackNext,
+  isSameTrack,
   playbackTrackKey,
   seekAudio,
 } from './lib/playback'
+import {
+  getLoopSeekTarget,
+  getLyricRanges,
+  markRangeLoopPoint,
+  resolveRangeLoop,
+  type RangeLoop,
+  type RangeLoopSelection,
+} from './lib/rangeLoop'
 import { CloseChoiceDialog } from './components/CloseChoiceDialog'
 import { mergeImportedPlaylists } from './lib/playlistImport'
 import { mergePlaylists, mergeTracksIntoPlaylist, renamePlaylist } from './lib/playlists'
 import { LibraryNavigation } from './components/LibraryNavigation'
 import { PlaylistImportModal } from './components/PlaylistImportModal'
-import { PlaylistActionMenu } from './components/PlaylistActionMenu'
+import { ContextActionMenu } from './components/ContextActionMenu'
+import { Select } from './components/Select'
 import {
   PlaylistDeleteDialog,
   PlaylistMergeDialog,
@@ -199,6 +214,13 @@ type PlaybackAudioSource = {
   cacheWrite?: { key: string; quality: Quality; proxy?: string }
 }
 
+type TrackMenu = {
+  track: MusicTrack
+  playlistId: string | null
+  x: number
+  y: number
+}
+
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   playQuality: '320k',
@@ -211,6 +233,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   showMenuBarIcon: true,
   menuBarLyrics: false,
   lyricFontScale: 100,
+  rangeLoopUnit: 'free',
   proxy: '',
 }
 
@@ -222,6 +245,16 @@ const qualityNames: Record<Quality, string> = {
 }
 
 const qualityOrder: Quality[] = ['128k', '320k', 'flac', 'flac24bit']
+const qualityOptions = qualityOrder.map((quality) => ({ value: quality, label: `${qualityNames[quality]} · ${quality}` }))
+const rangeLoopUnitOptions = [
+  { value: 'free', label: '自由' },
+  { value: 'lyric', label: '歌词' },
+] as const
+const closeBehaviorOptions = [
+  { value: 'ask', label: '每次询问' },
+  { value: 'tray', label: '隐藏到菜单栏' },
+  { value: 'quit', label: '退出应用' },
+] as const
 
 const loadJson = <T,>(key: string, fallback: T): T => {
   try {
@@ -240,6 +273,7 @@ const loadSettings = (): AppSettings => {
   if (!['ask', 'quit', 'tray'].includes(settings.closeBehavior)) {
     settings.closeBehavior = 'ask'
   }
+  if (settings.rangeLoopUnit !== 'lyric') settings.rangeLoopUnit = DEFAULT_SETTINGS.rangeLoopUnit
   if (
     !Number.isInteger(settings.songCacheSizeMb) ||
     settings.songCacheSizeMb < 0 ||
@@ -306,9 +340,6 @@ const loadFavoriteAlbums = (): SavedAlbum[] => {
 const albumCollectionKey = (album: AlbumSummary) =>
   `${album.source}:${album.id || album.albumMid || `${album.singer}:${album.name}`}`
 
-const isSameTrack = (left: MusicTrack, right: MusicTrack) =>
-  left.source === right.source && left.id === right.id
-
 const createShuffledQueue = (
   tracks: MusicTrack[],
   firstTrack?: MusicTrack | null,
@@ -347,6 +378,12 @@ const formatClock = (seconds: number) => {
   return `${minutes.toString().padStart(2, '0')}:${rest
     .toString()
     .padStart(2, '0')}`
+}
+
+const formatLoopPoint = (seconds: number | null) => {
+  if (seconds === null) return '—'
+  const hundredths = Math.round(seconds * 100)
+  return `${formatClock(hundredths / 100)}.${String(hundredths % 100).padStart(2, '0')}`
 }
 
 const sanitizeFileName = (value: string) =>
@@ -536,6 +573,7 @@ function App() {
   const [playlistCreateOpen, setPlaylistCreateOpen] = useState(false)
   const [playlistImportOpen, setPlaylistImportOpen] = useState(false)
   const [playlistMenu, setPlaylistMenu] = useState<{ playlistId: string; x: number; y: number } | null>(null)
+  const [trackMenu, setTrackMenu] = useState<TrackMenu | null>(null)
   const [playlistToRename, setPlaylistToRename] = useState<PlayList | null>(null)
   const [playlistToMerge, setPlaylistToMerge] = useState<PlayList | null>(null)
   const [playlistToDelete, setPlaylistToDelete] = useState<PlayList | null>(null)
@@ -594,6 +632,7 @@ function App() {
   const playbackAttemptRef = useRef<{
     requestId: number
     track: MusicTrack
+    autoplay: boolean
     failed: boolean
   } | null>(null)
   const failedTrackKeysRef = useRef(new Set<string>())
@@ -601,6 +640,7 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [loopSelection, setLoopSelection] = useState<RangeLoopSelection | null>(null)
   const [volume, setVolume] = useState(0.8)
   const [artwork, setArtwork] = useState<string | null>(null)
   const artworkRequestRef = useRef(0)
@@ -686,6 +726,7 @@ function App() {
   }
 
   const closePlayerPage = () => {
+    setLoopSelection(null)
     if (playerOpenFrameRef.current !== null) {
       cancelAnimationFrame(playerOpenFrameRef.current)
       playerOpenFrameRef.current = null
@@ -774,6 +815,101 @@ function App() {
     () => getActiveLyricIndex(lyricLines, currentTime),
     [currentTime, lyricLines],
   )
+  const lyricRanges = useMemo(() => getLyricRanges(lyricLines, duration), [lyricLines, duration])
+  const rangeLoopUnit = loopSelection?.unit ?? settings.rangeLoopUnit
+  const rangeLoop = useMemo(
+    () => loopSelection && resolveRangeLoop(loopSelection, rangeLoopUnit, lyricRanges),
+    [loopSelection, rangeLoopUnit, lyricRanges],
+  )
+  const rangeLoopActive = loopSelection !== null
+  const loopRanges = rangeLoop?.ranges
+  const canPlayLoop = !rangeLoop || rangeLoop.ranges.length > 0
+  const hasOneLoopPoint = !!rangeLoop && (rangeLoop.start === null) !== (rangeLoop.end === null)
+  const canToggleRangePlayback = canPlayLoop || (hasOneLoopPoint && isPlaying)
+
+  useEffect(() => {
+    const markPoint = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase()
+      if (key !== 'i' && key !== 'o') return
+      if (event.defaultPrevented || event.repeat || event.isComposing ||
+          event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      const target = event.target
+      if (target instanceof HTMLElement && (target.isContentEditable ||
+          target.closest('input:not([type="range"]), textarea, [role="combobox"], [role="textbox"]'))) return
+      if (document.querySelector('[aria-modal="true"]')) return
+
+      const audio = audioRef.current
+      if (!audio || audioSource?.requestId !== playbackRequestRef.current ||
+          !Number.isFinite(audio.duration) || audio.duration <= 0) return
+      event.preventDefault()
+      const time = Math.max(0, Math.min(audio.currentTime, audio.duration))
+      setLoopSelection((current) => markRangeLoopPoint(current, rangeLoop, key === 'i' ? 'start' : 'end', time))
+    }
+    window.addEventListener('keydown', markPoint)
+    return () => window.removeEventListener('keydown', markPoint)
+  }, [audioSource, rangeLoop])
+
+  useEffect(() => {
+    if (!rangeLoopActive || !isTauri()) return
+    const appWindow = getCurrentWindow()
+    let disposed = false
+    let pending = false
+    const checkMinimized = async () => {
+      if (pending) return
+      pending = true
+      try {
+        if (await appWindow.isMinimized() && !disposed) setLoopSelection(null)
+      } catch (error) {
+        window.clearInterval(timer)
+        console.debug('读取窗口最小化状态失败', error)
+      } finally {
+        pending = false
+      }
+    }
+    // A system-initiated minimize may complete after the WebView loses focus.
+    const timer = window.setInterval(checkMinimized, 500)
+    void checkMinimized()
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [rangeLoopActive])
+
+  useLayoutEffect(() => {
+    const audio = audioRef.current
+    if (!audio || !audioSource || !loopRanges) return
+    if (!loopRanges.length) {
+      if (hasOneLoopPoint) return
+      cancelPlaybackFade()
+      audio.pause()
+      audio.volume = volumeRef.current
+      return
+    }
+
+    let timer: number | undefined
+    const update = () => {
+      window.clearTimeout(timer)
+      if (audio.paused || audio.ended || audio.seeking || audio.readyState < 3 || audio.playbackRate <= 0) return
+      const position = audio.currentTime
+      const target = getLoopSeekTarget(loopRanges, position)
+      if (target !== null) {
+        seekAudio(audio, target)
+        return
+      }
+      const range = loopRanges.find((range) => position < range.end)
+      if (range) {
+        timer = window.setTimeout(update, Math.max(10, (range.end - position) * 1000 / audio.playbackRate))
+      }
+    }
+
+    const events = ['playing', 'pause', 'waiting', 'seeking', 'seeked', 'ratechange', 'timeupdate']
+    for (const event of events) audio.addEventListener(event, update)
+    update()
+    return () => {
+      window.clearTimeout(timer)
+      for (const event of events) audio.removeEventListener(event, update)
+    }
+  }, [audioSource, hasOneLoopPoint, loopRanges])
 
   const activeSource = sources.find((source) => source.id === activeSourceId)
   const showingFavoriteAlbums = activePlaylistId === ALBUM_COLLECTION_ID
@@ -801,7 +937,10 @@ function App() {
   }
 
   const minimizeWindow = () =>
-    runWindowAction(() => getCurrentWindow().minimize())
+    runWindowAction(async () => {
+      await getCurrentWindow().minimize()
+      setLoopSelection(null)
+    })
 
   const toggleWindowFullscreen = () =>
     runWindowAction(async () => {
@@ -824,11 +963,6 @@ function App() {
   }, [settings.songCacheSizeMb])
 
   useEffect(() => {
-    queueRef.current = queue
-  }, [queue])
-
-  useEffect(() => {
-    playbackModeRef.current = playbackMode
     localStore.setItem(PLAYBACK_MODE_STORAGE_KEY, playbackMode)
   }, [playbackMode])
 
@@ -1042,6 +1176,8 @@ function App() {
     const { requestId } = audioSource
     let cancelled = false
     audio.volume = volumeRef.current
+    const attempt = playbackAttemptRef.current
+    if (attempt?.requestId !== requestId || !attempt.autoplay || loopSelection) return
     void audio
       .play()
       .then(() => {
@@ -1537,6 +1673,7 @@ function App() {
         canonicalQueue: orderedQueueRef.current,
         preserveRandomQueue: true,
         continueAfterFailure: true,
+        autoplay: attempt.autoplay,
       })
     } else {
       setAudioSource(null)
@@ -1603,6 +1740,77 @@ function App() {
     handlePlaybackFailure(source.requestId, error)
   }
 
+  function updatePlaybackQueue(nextQueue: MusicTrack[], canonicalQueue = nextQueue) {
+    queueRef.current = nextQueue
+    orderedQueueRef.current = canonicalQueue
+    setQueue(nextQueue)
+  }
+
+  function playTrackNext(track: MusicTrack) {
+    const activeTrack = playbackAttemptRef.current?.track ?? null
+    const activeQueue = queueRef.current
+    const nextQueue = insertTrackNext(activeQueue, activeTrack, track)
+    if (nextQueue === activeQueue) return
+    const orderedQueue = orderedQueueRef.current
+    updatePlaybackQueue(nextQueue, orderedQueue === activeQueue
+      ? nextQueue
+      : insertTrackNext(orderedQueue, activeTrack, track))
+    showToast('已设为下一首播放')
+  }
+
+  function clearCurrentPlayback() {
+    playbackRequestRef.current += 1
+    playbackAttemptRef.current = null
+    failedTrackKeysRef.current.clear()
+    artworkRequestRef.current += 1
+    lyricRequestRef.current += 1
+    cancelPlaybackFade()
+    const audio = audioRef.current
+    if (audio) {
+      audio.pause()
+      audio.removeAttribute('src')
+      audio.load()
+    }
+    if (playerPageMounted) closePlayerPage()
+    setLoopSelection(null)
+    setCurrentTrack(null)
+    setAudioSource(null)
+    setIsResolving(false)
+    setIsPlaying(false)
+    setCurrentTime(0)
+    setDuration(0)
+    setArtwork(null)
+    setLyrics(null)
+    setLyricsLoading(false)
+    setLyricsError('')
+  }
+
+  function removeTrackFromQueue(track: MusicTrack) {
+    const activeQueue = queueRef.current
+    const trackIndex = activeQueue.findIndex((item) => isSameTrack(item, track))
+    if (trackIndex === -1) return
+    const keepTrack = (item: MusicTrack) => !isSameTrack(item, track)
+    const nextQueue = activeQueue.filter(keepTrack)
+    const canonicalQueue = orderedQueueRef.current === activeQueue
+      ? nextQueue
+      : orderedQueueRef.current.filter(keepTrack)
+    const attempt = playbackAttemptRef.current
+    updatePlaybackQueue(nextQueue, canonicalQueue)
+    if (!attempt || !isSameTrack(attempt.track, track)) return
+
+    const nextTrack = nextQueue[trackIndex]
+      ?? (playbackModeRef.current === 'sequence' ? undefined : nextQueue[0])
+    if (nextTrack) {
+      void playTrack(nextTrack, nextQueue, {
+        canonicalQueue,
+        preserveRandomQueue: true,
+        autoplay: isResolving ? attempt.autoplay : isPlaying,
+      })
+    } else {
+      clearCurrentPlayback()
+    }
+  }
+
   async function playTrack(
     track: MusicTrack,
     list: MusicTrack[] = queueRef.current,
@@ -1610,10 +1818,12 @@ function App() {
       canonicalQueue?: MusicTrack[]
       preserveRandomQueue?: boolean
       continueAfterFailure?: boolean
+      autoplay?: boolean
     } = {},
   ) {
     const requestId = ++playbackRequestRef.current
-    playbackAttemptRef.current = { requestId, track, failed: false }
+    setLoopSelection(null)
+    playbackAttemptRef.current = { requestId, track, autoplay: options.autoplay ?? true, failed: false }
     if (!options.continueAfterFailure) failedTrackKeysRef.current.clear()
     cancelPlaybackFade()
     if (audioRef.current) {
@@ -1623,21 +1833,19 @@ function App() {
     setIsPlaying(false)
     const sourceQueue = list.length ? list : [track]
     const canonicalQueue =
-      playbackMode === 'random' &&
+      playbackModeRef.current === 'random' &&
       options.canonicalQueue === undefined &&
       list === queueRef.current &&
       orderedQueueRef.current.length
         ? orderedQueueRef.current
         : options.canonicalQueue ?? sourceQueue
     const nextQueue =
-      playbackMode === 'random' && !options.preserveRandomQueue
+      playbackModeRef.current === 'random' && !options.preserveRandomQueue
         ? createShuffledQueue(canonicalQueue, track)
         : sourceQueue
     setCurrentTrack(track)
     const artworkRequestId = ++artworkRequestRef.current
-    setQueue(nextQueue)
-    queueRef.current = nextQueue
-    orderedQueueRef.current = canonicalQueue
+    updatePlaybackQueue(nextQueue, canonicalQueue)
     setArtwork(track.img ?? null)
     setCurrentQuality(
       pickQuality(track, sourceStatus.capabilities, settings.playQuality),
@@ -1659,6 +1867,9 @@ function App() {
   }
 
   function playAdjacent(direction: 1 | -1, trigger: 'manual' | 'ended') {
+    const currentTrack = playbackAttemptRef.current?.track
+    const queue = queueRef.current
+    const playbackMode = playbackModeRef.current
     if (!currentTrack || !queue.length) return
     const index = queue.findIndex((track) => isSameTrack(track, currentTrack))
     const isLast = index === queue.length - 1
@@ -1707,16 +1918,17 @@ function App() {
     const nextMode =
       playbackModes[(currentIndex + 1) % playbackModes.length].value
 
+    playbackModeRef.current = nextMode
     setPlaybackMode(nextMode)
     if (nextMode === 'random') {
       const canonicalQueue = orderedQueueRef.current.length
         ? orderedQueueRef.current
         : queueRef.current
-      setQueue(createShuffledQueue(canonicalQueue, currentTrack))
+      updatePlaybackQueue(createShuffledQueue(canonicalQueue, currentTrack), canonicalQueue)
       return
     }
     if (playbackMode === 'random' && orderedQueueRef.current.length) {
-      setQueue(orderedQueueRef.current)
+      updatePlaybackQueue(orderedQueueRef.current)
     }
   }
 
@@ -1725,6 +1937,7 @@ function App() {
     if (!audio || isResolving) return
 
     const shouldPlay = playing ?? (audio.paused || audioFadeDirectionRef.current === 'out')
+    if (shouldPlay && !prepareRangePlayback(audio)) return
     cancelPlaybackFade()
     audio.volume = volumeRef.current
     if (!shouldPlay) {
@@ -1737,6 +1950,12 @@ function App() {
   }
 
   function togglePlayback() {
+    if (!canToggleRangePlayback) return
+    const nextTrack = queueRef.current[0]
+    if (!currentTrack && nextTrack) {
+      void playTrack(nextTrack, queueRef.current, { preserveRandomQueue: true })
+      return
+    }
     if (document.hidden) {
       setPlaybackImmediately()
       return
@@ -1750,6 +1969,7 @@ function App() {
     }
 
     if (audioFadeDirectionRef.current === 'out') {
+      if (!canPlayLoop) return
       cancelPlaybackFade()
       fadeAudioVolume(volumeRef.current, 'in')
       return
@@ -1766,13 +1986,14 @@ function App() {
     }
 
     if (audio.paused) {
+      if (!prepareRangePlayback(audio)) return
       const requestId = playbackRequestRef.current
       audio.volume = 0
       void audio
         .play()
         .then(() => {
           if (requestId !== playbackRequestRef.current) return
-          if (audioFadeDirectionRef.current === null) {
+          if (!audio.paused && audioFadeDirectionRef.current === null) {
             fadeAudioVolume(volumeRef.current, 'in')
           }
         })
@@ -1788,6 +2009,31 @@ function App() {
         audioRef.current.volume = volumeRef.current
       })
     }
+  }
+
+  function prepareRangePlayback(audio: HTMLAudioElement): boolean {
+    if (!loopRanges) return true
+    if (!canPlayLoop || audio.readyState < 1) return false
+    const target = getLoopSeekTarget(loopRanges, audio.currentTime)
+    if (target !== null) seekAudio(audio, target)
+    return true
+  }
+
+  function toggleRangeLoop() {
+    setLoopSelection((current) => current ? null : { kind: 'points', start: null, end: null })
+  }
+
+  function selectLyric(index: number, modified: boolean) {
+    if (!modified && !rangeLoop) {
+      seekTo(lyricLines[index].time)
+      return
+    }
+    setLoopSelection((current) => {
+      const indices = new Set(current?.kind === 'lyrics' ? current.indices : rangeLoop?.lyricIndices)
+      if (indices.has(index)) indices.delete(index)
+      else indices.add(index)
+      return { kind: 'lyrics', indices, unit: current?.unit }
+    })
   }
 
   function seekTo(value: number) {
@@ -1868,6 +2114,22 @@ function App() {
     const bounds = event.currentTarget.getBoundingClientRect()
     setActivePlaylistId(playlistId)
     setPlaylistMenu({
+      playlistId,
+      x: event.clientX || bounds.left + 20,
+      y: event.clientY || bounds.bottom,
+    })
+  }
+
+  function openTrackContextMenu(track: MusicTrack, event: MouseEvent<HTMLElement>, playlistId: string | null = null) {
+    event.preventDefault()
+    const trigger = event.currentTarget
+    const button = trigger instanceof HTMLButtonElement
+      ? trigger
+      : trigger.querySelector<HTMLButtonElement>('button.track-index')
+    button?.focus()
+    const bounds = (button ?? trigger).getBoundingClientRect()
+    setTrackMenu({
+      track,
       playlistId,
       x: event.clientX || bounds.left + 20,
       y: event.clientY || bounds.bottom,
@@ -1973,6 +2235,18 @@ function App() {
         }
       }),
     ).catch((error) => showToast(`保存歌单失败：${String(error)}`))
+  }
+
+  function removePlaylistTrack(playlistId: string, track: MusicTrack) {
+    if (!playlistStorageReady) {
+      showToast(playlistStorageError || '正在加载本机歌单，请稍候')
+      return
+    }
+    void savePlaylistChange((current) => current.map((playlist) =>
+      playlist.id === playlistId
+        ? { ...playlist, tracks: playlist.tracks.filter((item) => !isSameTrack(item, track)) }
+        : playlist,
+    )).catch((error) => showToast(`保存歌单失败：${String(error)}`))
   }
 
   function toggleFavoriteAlbum(detail: AlbumDetail) {
@@ -2189,31 +2463,14 @@ function App() {
       )
       const deletedPath = downloadToDelete.path
       setDownloadedFiles((files) => files.filter((file) => file.path !== deletedPath))
-      if (currentTrack?.filePath === deletedPath) {
-        playbackRequestRef.current += 1
-        playbackAttemptRef.current = null
-        failedTrackKeysRef.current.clear()
-        cancelPlaybackFade()
-        audioRef.current?.pause()
-        if (audioRef.current) {
-          audioRef.current.removeAttribute('src')
-          audioRef.current.load()
-        }
-        setCurrentTrack(null)
-        setQueue([])
-        queueRef.current = []
-        orderedQueueRef.current = []
-        setAudioSource(null)
-        setIsResolving(false)
-        setIsPlaying(false)
+      if (playbackAttemptRef.current?.track.filePath === deletedPath) {
+        updatePlaybackQueue([])
+        clearCurrentPlayback()
       } else {
-        const remainingQueue = queue.filter(
-          (item) => item.filePath !== deletedPath,
-        )
-        setQueue(remainingQueue)
-        queueRef.current = remainingQueue
-        orderedQueueRef.current = orderedQueueRef.current.filter(
-          (item) => item.filePath !== deletedPath,
+        const keepTrack = (item: MusicTrack) => item.filePath !== deletedPath
+        updatePlaybackQueue(
+          queueRef.current.filter(keepTrack),
+          orderedQueueRef.current.filter(keepTrack),
         )
       }
       setDownloadToDelete(null)
@@ -2459,7 +2716,7 @@ function App() {
     setSettings,
     track: currentTrack ? `${currentTrack.name} · ${currentTrack.singer}` : null,
     isPlaying,
-    canToggle: currentTrack !== null && !isResolving,
+    canToggle: currentTrack !== null && !isResolving && canToggleRangePlayback,
     canPrevious: trackQueueIndex >= 0 && (playbackMode !== 'sequence' || trackQueueIndex > 0),
     canNext: trackQueueIndex >= 0 && (playbackMode !== 'sequence' || trackQueueIndex < queue.length - 1),
     playerPageOpen: playerOpen,
@@ -2511,12 +2768,23 @@ function App() {
             new Error(error.message || `音频加载或解码失败（错误码 ${error.code}）`),
           )
         }}
-        onEnded={() => {
+        onEnded={(event) => {
           if (
             !audioSource ||
             audioSource.requestId !== playbackRequestRef.current ||
             playbackAttemptRef.current?.failed
           ) return
+          if (loopRanges) {
+            const first = loopRanges[0]
+            if (first) {
+              const audio = event.currentTarget
+              seekAudio(audio, first.start)
+              void audio.play().catch((error) => handleAudioError(audioSource, error))
+            } else {
+              setIsPlaying(false)
+            }
+            return
+          }
           setIsPlaying(false)
           playAdjacent(1, 'ended')
         }}
@@ -2632,21 +2900,15 @@ function App() {
             }
           >
             <span className={`status-dot ${sourceStatus.state}`} />
-            <select
+            <Select
+              label="切换当前音源"
               value={activeSourceId}
-              onChange={(event) =>
-                void activateSource(event.target.value, sources, true)
-              }
+              options={sources.length
+                ? sources.map((source) => ({ value: source.id, label: source.name }))
+                : [{ value: '', label: '未配置音源' }]}
+              onChange={(id) => void activateSource(id, sources, true)}
               disabled={!sources.length}
-              aria-label="切换当前音源"
-            >
-              {!sources.length && <option value="">未配置音源</option>}
-              {sources.map((source) => (
-                <option key={source.id} value={source.id}>
-                  {source.name}
-                </option>
-              ))}
-            </select>
+            />
           </div>
         </header>
 
@@ -2828,6 +3090,7 @@ function App() {
                   capabilities={sourceStatus.capabilities}
                   playQuality={settings.playQuality}
                   onPlay={(track) => void playTrack(track, activePlaylist.tracks)}
+                  onTrackMenu={(track, event) => openTrackContextMenu(track, event, activePlaylist.id)}
                   onFavorite={setPlaylistPickerTrack}
                   onDownload={requestTrackDownload}
                   getDownloadState={getTrackDownloadState}
@@ -2910,10 +3173,13 @@ function App() {
       <PlayerBar
         anchorRef={playerAnchorRef}
         track={currentTrack}
+        hasQueuedTracks={queue.length > 0}
         artwork={artwork}
         quality={currentQuality}
         isPlaying={isPlaying}
         isResolving={isResolving}
+        rangeLoop={rangeLoop}
+        canToggleRangePlayback={canToggleRangePlayback}
         currentTime={currentTime}
         duration={duration}
         volume={volume}
@@ -2950,6 +3216,12 @@ function App() {
           quality={currentQuality}
           isPlaying={isPlaying}
           isResolving={isResolving}
+          rangeLoop={rangeLoop}
+          canToggleRangePlayback={canToggleRangePlayback}
+          rangeLoopUnit={rangeLoopUnit}
+          onRangeLoopUnitChange={(unit) => setLoopSelection((current) => current && { ...current, unit })}
+          onToggleRangeLoop={toggleRangeLoop}
+          onSelectLyric={selectLyric}
           currentTime={currentTime}
           duration={duration}
           lyricLines={lyricLines}
@@ -2990,14 +3262,16 @@ function App() {
         />
       )}
 
-      {queueOpen && currentTrack && (
+      {queueOpen && (
         <QueuePanel
-          queue={queue.length ? queue : [currentTrack]}
+          queue={queue}
           currentTrack={currentTrack}
-          onSelect={(track) =>
-            void playTrack(track, queue.length ? queue : [currentTrack])
-          }
-          onClose={() => setQueueOpen(false)}
+          onSelect={(track) => void playTrack(track)}
+          onTrackMenu={openTrackContextMenu}
+          onClose={() => {
+            setQueueOpen(false)
+            setTrackMenu(null)
+          }}
         />
       )}
 
@@ -3170,16 +3444,56 @@ function App() {
       )}
 
       {playlistMenu && menuPlaylist && (
-        <PlaylistActionMenu
+        <ContextActionMenu
           key={`${playlistMenu.playlistId}:${playlistMenu.x}:${playlistMenu.y}`}
-          playlist={menuPlaylist}
+          title={menuPlaylist.name}
+          label={`${menuPlaylist.name}的歌单操作`}
           x={playlistMenu.x}
           y={playlistMenu.y}
           onClose={() => setPlaylistMenu(null)}
-          onRename={() => { setPlaylistMenu(null); setPlaylistToRename(menuPlaylist) }}
-          onMerge={() => { setPlaylistMenu(null); setPlaylistToMerge(menuPlaylist) }}
-          onDelete={() => { setPlaylistMenu(null); setPlaylistToDelete(menuPlaylist) }}
-        />
+        >
+          <button role="menuitem" onClick={() => { setPlaylistMenu(null); setPlaylistToRename(menuPlaylist) }}>
+            <Pencil size={15} /><span>重命名</span>
+          </button>
+          <button role="menuitem" onClick={() => { setPlaylistMenu(null); setPlaylistToMerge(menuPlaylist) }}>
+            <Merge size={15} /><span>合并到…</span>
+          </button>
+          <button role="menuitem" className="danger" onClick={() => { setPlaylistMenu(null); setPlaylistToDelete(menuPlaylist) }}>
+            <Trash2 size={15} /><span>删除歌单…</span>
+          </button>
+        </ContextActionMenu>
+      )}
+
+      {trackMenu && (
+        <ContextActionMenu
+          title={trackMenu.track.name}
+          label={`${trackMenu.track.name}的歌曲操作`}
+          x={trackMenu.x}
+          y={trackMenu.y}
+          onClose={() => setTrackMenu(null)}
+        >
+          <button
+            role="menuitem"
+            disabled={currentTrack !== null && isSameTrack(trackMenu.track, currentTrack)}
+            onClick={() => {
+              setTrackMenu(null)
+              playTrackNext(trackMenu.track)
+            }}
+          >
+            <ListPlus size={15} /><span>下一首播放</span>
+          </button>
+          <button
+            role="menuitem"
+            className="danger"
+            onClick={() => {
+              setTrackMenu(null)
+              if (trackMenu.playlistId === null) removeTrackFromQueue(trackMenu.track)
+              else removePlaylistTrack(trackMenu.playlistId, trackMenu.track)
+            }}
+          >
+            <Trash2 size={15} /><span>{trackMenu.playlistId === null ? '从播放列表移除' : '从歌单移除'}</span>
+          </button>
+        </ContextActionMenu>
       )}
 
       {playlistToRename && (
@@ -3575,6 +3889,7 @@ interface TrackTableProps {
   onDownload: (track: MusicTrack) => void
   getDownloadState: (track: MusicTrack) => TrackDownloadState
   onOpenAlbum: (track: MusicTrack) => void
+  onTrackMenu?: (track: MusicTrack, event: MouseEvent<HTMLElement>) => void
 }
 
 function TrackTable({
@@ -3689,6 +4004,7 @@ const TrackRow = memo(function TrackRow({
   onDownload,
   getDownloadState,
   onOpenAlbum,
+  onTrackMenu,
 }: Omit<TrackTableProps, 'tracks' | 'virtualize'> & { track: MusicTrack; index: number; top?: number }) {
   const liked = favoriteTrackIds.has(playbackTrackKey(track))
   const playbackQuality = pickQuality(track, capabilities, playQuality)
@@ -3705,6 +4021,7 @@ const TrackRow = memo(function TrackRow({
       className={`track-row download-${downloadState.status}`}
       data-track-index={index}
       style={top === undefined ? undefined : { top, height: PLAYLIST_TRACK_ROW_HEIGHT }}
+      onContextMenu={onTrackMenu ? (event) => onTrackMenu(track, event) : undefined}
     >
       <button className="track-index" onClick={() => onPlay(track)}>
         <span>{(index + 1).toString().padStart(2, '0')}</span>
@@ -3774,7 +4091,11 @@ const TrackRow = memo(function TrackRow({
             <Download size={17} />
           )}
         </button>
-        <button aria-label="播放" onClick={() => onPlay(track)}>
+        <button
+          aria-label={onTrackMenu ? '歌曲操作' : '播放'}
+          aria-haspopup={onTrackMenu ? 'menu' : undefined}
+          onClick={(event) => onTrackMenu ? onTrackMenu(track, event) : onPlay(track)}
+        >
           <MoreHorizontal size={18} />
         </button>
       </div>
@@ -4154,21 +4475,20 @@ function SettingsView(props: SettingsViewProps) {
             </div>
           </SettingRow>
           <SettingRow label="默认音质">
-            <select
+            <Select
+              label="默认音质"
               value={props.settings.playQuality}
-              onChange={(event) =>
-                props.setSettings((current) => ({
-                  ...current,
-                  playQuality: event.target.value as Quality,
-                }))
-              }
-            >
-              {qualityOrder.map((quality) => (
-                <option key={quality} value={quality}>
-                  {qualityNames[quality]} · {quality}
-                </option>
-              ))}
-            </select>
+              options={qualityOptions}
+              onChange={(playQuality) => props.setSettings((current) => ({ ...current, playQuality }))}
+            />
+          </SettingRow>
+          <SettingRow label="默认歌词循环最小单位" description="进入歌词循环模式时使用，可在歌词工具栏临时切换">
+            <Select
+              label="默认歌词循环最小单位"
+              value={props.settings.rangeLoopUnit}
+              options={rangeLoopUnitOptions}
+              onChange={(rangeLoopUnit) => props.setSettings((current) => ({ ...current, rangeLoopUnit }))}
+            />
           </SettingRow>
           <SettingRow
             label="歌曲缓存容量（MB）"
@@ -4201,20 +4521,12 @@ function SettingsView(props: SettingsViewProps) {
             label="点击关闭按钮时"
             description="隐藏窗口后继续播放，可通过 Dock 或菜单栏图标恢复窗口"
           >
-            <select
-              aria-label="点击关闭按钮时"
+            <Select
+              label="点击关闭按钮时"
               value={props.settings.closeBehavior}
-              onChange={(event) =>
-                props.setSettings((current) => ({
-                  ...current,
-                  closeBehavior: event.target.value as CloseBehavior,
-                }))
-              }
-            >
-              <option value="ask">每次询问</option>
-              <option value="tray">隐藏到菜单栏</option>
-              <option value="quit">退出应用</option>
-            </select>
+              options={closeBehaviorOptions}
+              onChange={(closeBehavior) => props.setSettings((current) => ({ ...current, closeBehavior }))}
+            />
           </SettingRow>
           <SettingRow
             label="显示菜单栏图标"
@@ -4522,16 +4834,18 @@ function SettingRow({
 
 interface QueuePanelProps {
   queue: MusicTrack[]
-  currentTrack: MusicTrack
+  currentTrack: MusicTrack | null
   onSelect: (track: MusicTrack) => void
+  onTrackMenu: (track: MusicTrack, event: MouseEvent<HTMLElement>) => void
   onClose: () => void
 }
 
 function QueuePanel(props: QueuePanelProps) {
   const currentItemRef = useRef<HTMLButtonElement>(null)
-  const currentIndex = props.queue.findIndex((track) =>
-    isSameTrack(track, props.currentTrack),
-  )
+  const currentTrack = props.currentTrack
+  const currentIndex = currentTrack
+    ? props.queue.findIndex((track) => isSameTrack(track, currentTrack))
+    : -1
 
   useEffect(() => {
     currentItemRef.current?.scrollIntoView({ block: 'center' })
@@ -4559,7 +4873,8 @@ function QueuePanel(props: QueuePanelProps) {
             <span className="eyebrow">UP NEXT</span>
             <h2>播放列表</h2>
             <p>
-              当前第 {Math.max(currentIndex + 1, 1)} 首，共 {props.queue.length} 首
+              {currentIndex >= 0 && `当前第 ${currentIndex + 1} 首，`}
+              共 {props.queue.length} 首
             </p>
           </div>
           <button onClick={props.onClose} aria-label="关闭播放列表">
@@ -4567,14 +4882,16 @@ function QueuePanel(props: QueuePanelProps) {
           </button>
         </div>
         <div className="queue-list">
+          {!props.queue.length && <p className="queue-empty">播放列表为空</p>}
           {props.queue.map((track, index) => {
-            const current = isSameTrack(track, props.currentTrack)
+            const current = index === currentIndex
             return (
               <button
                 ref={current ? currentItemRef : undefined}
                 className={`queue-item ${current ? 'current' : ''}`}
                 key={`${track.source}-${track.id}-${index}`}
                 onClick={() => props.onSelect(track)}
+                onContextMenu={(event) => props.onTrackMenu(track, event)}
               >
                 <span className="queue-item-index">
                   {current ? (
@@ -4603,15 +4920,58 @@ function QueuePanel(props: QueuePanelProps) {
   )
 }
 
-interface PlayerBarProps {
+interface PlaybackTimelineProps {
+  currentTime: number
+  duration: number
+  rangeLoop: RangeLoop | null
+  onSeek: (value: number) => void
+}
+
+function PlaybackTimeline({ currentTime, duration, rangeLoop, onSeek }: PlaybackTimelineProps) {
+  const percent = (time: number) => duration ? Math.min(Math.max(time / duration * 100, 0), 100) : 0
+  return (
+    <div className={`playback-timeline ${rangeLoop ? 'loop-active' : ''}`}>
+      <div className="timeline-rail" aria-hidden="true">
+        <span className="timeline-elapsed" style={{ width: `${percent(currentTime)}%` }} />
+        {rangeLoop?.ranges.map(({ start, end }) => (
+          <span
+            key={start}
+            className="timeline-loop-range"
+            style={{ left: `${percent(start)}%`, width: `${percent(end) - percent(start)}%` }}
+          />
+        ))}
+        {rangeLoop?.start != null && (
+          <span className="timeline-loop-marker" style={{ left: `${percent(rangeLoop.start)}%` }} />
+        )}
+        {rangeLoop?.end != null && (
+          <span className="timeline-loop-marker" style={{ left: `${percent(rangeLoop.end)}%` }} />
+        )}
+      </div>
+      <input
+        className="timeline-slider"
+        type="range"
+        min={0}
+        max={duration}
+        step="any"
+        value={Math.min(currentTime, duration)}
+        aria-label="播放进度"
+        aria-keyshortcuts="I O"
+        title="I 标记入点，O 标记出点"
+        onChange={(event) => onSeek(Number(event.target.value))}
+      />
+    </div>
+  )
+}
+
+interface PlayerBarProps extends PlaybackTimelineProps {
   anchorRef: RefObject<HTMLButtonElement | null>
   track: MusicTrack | null
+  hasQueuedTracks: boolean
   artwork: string | null
   quality: Quality
   isPlaying: boolean
   isResolving: boolean
-  currentTime: number
-  duration: number
+  canToggleRangePlayback: boolean
   volume: number
   isFavorite: boolean
   downloadState?: TrackDownloadState
@@ -4627,7 +4987,6 @@ interface PlayerBarProps {
   menuBarLyrics: boolean
   showMenuBarIcon: boolean
   onMenuBarLyrics: () => void
-  onSeek: (value: number) => void
   onOpen: () => void
 }
 
@@ -4734,7 +5093,7 @@ function PlayerBar(props: PlayerBarProps) {
             </div>
             <div>
               <strong>还没有播放音乐</strong>
-              <span>从搜索结果选择一首歌</span>
+              <span>{props.hasQueuedTracks ? '点击播放按钮开始播放' : '从搜索结果选择一首歌'}</span>
             </div>
           </>
         )}
@@ -4768,7 +5127,8 @@ function PlayerBar(props: PlayerBarProps) {
           <button
             className="play-button"
             onClick={props.onToggle}
-            disabled={!props.track || props.isResolving}
+            aria-label={props.isPlaying ? '暂停' : '播放'}
+            disabled={(!props.track && !props.hasQueuedTracks) || props.isResolving || !props.canToggleRangePlayback}
           >
             {props.isResolving ? (
               <LoaderCircle className="spin" size={20} />
@@ -4788,7 +5148,7 @@ function PlayerBar(props: PlayerBarProps) {
           />
           <button
             onClick={props.onQueue}
-            disabled={!props.track}
+            disabled={!props.hasQueuedTracks}
             aria-label="播放列表"
             title="播放列表"
           >
@@ -4797,13 +5157,7 @@ function PlayerBar(props: PlayerBarProps) {
         </div>
         <div className="progress-row">
           <span>{formatClock(props.currentTime)}</span>
-          <input
-            type="range"
-            min={0}
-            max={props.duration || 0}
-            value={Math.min(props.currentTime, props.duration || 0)}
-            onChange={(event) => props.onSeek(Number(event.target.value))}
-          />
+          <PlaybackTimeline {...props} />
           <span>{formatClock(props.duration)}</span>
         </div>
       </div>
@@ -4828,7 +5182,7 @@ function PlayerBar(props: PlayerBarProps) {
   )
 }
 
-interface PlayerPageProps {
+interface PlayerPageProps extends PlaybackTimelineProps {
   open: boolean
   origin: { x: number; y: number; scale: number }
   track: MusicTrack
@@ -4836,8 +5190,11 @@ interface PlayerPageProps {
   quality: Quality
   isPlaying: boolean
   isResolving: boolean
-  currentTime: number
-  duration: number
+  canToggleRangePlayback: boolean
+  rangeLoopUnit: RangeLoopUnit
+  onRangeLoopUnitChange: (unit: RangeLoopUnit) => void
+  onToggleRangeLoop: () => void
+  onSelectLyric: (index: number, modified: boolean) => void
   lyricLines: LyricLine[]
   activeLyricIndex: number
   lyricsLoading: boolean
@@ -4857,7 +5214,6 @@ interface PlayerPageProps {
   menuBarLyrics: boolean
   showMenuBarIcon: boolean
   onMenuBarLyrics: () => void
-  onSeek: (value: number) => void
   onOpenAlbum: () => void
   onClosed: () => void
 }
@@ -4865,6 +5221,8 @@ interface PlayerPageProps {
 function PlayerPage(props: PlayerPageProps) {
   const { src: cachedArtwork } = useCoverUrl(props.artwork, props.open)
   const lyricsScrollRef = useRef<HTMLDivElement>(null)
+  const ctrlLyricRef = useRef<number | null>(null)
+  const rangeMode = props.rangeLoop !== null
   const [viewport, setViewport] = useState(() => ({
     width: document.documentElement.clientWidth,
     height: document.documentElement.clientHeight,
@@ -4894,7 +5252,7 @@ function PlayerPage(props: PlayerPageProps) {
   }, [])
 
   useEffect(() => {
-    if (!props.open) return
+    if (!props.open || rangeMode) return
     const container = lyricsScrollRef.current
     const activeLine = container?.querySelector<HTMLButtonElement>(
       `[data-lyric-index="${props.activeLyricIndex}"]`,
@@ -4910,6 +5268,7 @@ function PlayerPage(props: PlayerPageProps) {
     props.lyricFontScale,
     props.lyricLines,
     props.open,
+    rangeMode,
     viewport.width,
     viewport.height,
   ])
@@ -4977,14 +5336,8 @@ function PlayerPage(props: PlayerPageProps) {
             {qualityNames[props.quality]} · {props.quality}
           </span>
           <div className="player-page-progress">
-            <input
-              type="range"
-              min={0}
-              max={props.duration || 0}
-              value={Math.min(props.currentTime, props.duration || 0)}
-              onChange={(event) => props.onSeek(Number(event.target.value))}
-            />
-            <div>
+            <PlaybackTimeline {...props} />
+            <div className="player-page-time">
               <span>{formatClock(props.currentTime)}</span>
               <span>{formatClock(props.duration)}</span>
             </div>
@@ -5011,7 +5364,12 @@ function PlayerPage(props: PlayerPageProps) {
             <button onClick={props.onPrevious}>
               <SkipBack size={24} fill="currentColor" />
             </button>
-            <button className="hero-play-button" onClick={props.onToggle}>
+            <button
+              className="hero-play-button"
+              onClick={props.onToggle}
+              aria-label={props.isPlaying ? '暂停' : '播放'}
+              disabled={props.isResolving || !props.canToggleRangePlayback}
+            >
               {props.isResolving ? (
                 <LoaderCircle className="spin" size={28} />
               ) : props.isPlaying ? (
@@ -5047,7 +5405,18 @@ function PlayerPage(props: PlayerPageProps) {
         >
           <div className="lyrics-heading">
             <span>歌词</span>
-            <div className="lyrics-font-controls" role="group" aria-label="歌词显示设置">
+            <div className="lyrics-font-controls" role="group" aria-label="歌词工具栏">
+              <button
+                type="button"
+                className="range-loop-control"
+                aria-label="歌词循环模式"
+                aria-pressed={rangeMode}
+                title={rangeMode ? '退出歌词循环模式' : '进入歌词循环模式（I 入点，O 出点，Ctrl + 点击歌词）'}
+                onClick={props.onToggleRangeLoop}
+              >
+                <ScanLine size={15} aria-hidden="true" />
+                歌词循环
+              </button>
               <button
                 type="button"
                 aria-label="缩小歌词字号"
@@ -5080,6 +5449,33 @@ function PlayerPage(props: PlayerPageProps) {
               />}
             </div>
           </div>
+          {props.rangeLoop && (
+            <div className="lyrics-range-settings">
+              <div>
+                <output aria-label="歌词循环出入点">
+                  <span>I {formatLoopPoint(props.rangeLoop.start)}</span>
+                  <span>O {formatLoopPoint(props.rangeLoop.end)}</span>
+                </output>
+                {!props.rangeLoop.ranges.length && (
+                  <span className="lyrics-range-hint">
+                    {props.rangeLoop.start !== null && props.rangeLoop.end !== null
+                      ? '出点需晚于入点'
+                      : '点击歌词，或用 I / O 标记入点和出点'}
+                  </span>
+                )}
+              </div>
+              <div className="lyrics-range-unit">
+                最小单位
+                <Select
+                  label="当前歌词循环最小单位"
+                  variant="player"
+                  value={props.rangeLoopUnit}
+                  options={rangeLoopUnitOptions}
+                  onChange={props.onRangeLoopUnitChange}
+                />
+              </div>
+            </div>
+          )}
           <div className="lyrics-scroll" ref={lyricsScrollRef}>
             {props.lyricsLoading ? (
               <div className="lyrics-empty">
@@ -5087,19 +5483,33 @@ function PlayerPage(props: PlayerPageProps) {
                 正在获取歌词
               </div>
             ) : props.lyricLines.length ? (
-              props.lyricLines.map((line, index) => (
-                <button
+              props.lyricLines.map((line, index) => {
+                const selected = props.rangeLoop?.lyricIndices.has(index)
+                return <button
                   key={`${line.time}-${index}`}
                   data-lyric-index={index}
-                  className={`lyric-line ${
-                    props.activeLyricIndex === index ? 'active' : ''
-                  }`}
-                  onClick={() => props.onSeek(line.time)}
+                  className={`lyric-line ${props.activeLyricIndex === index ? 'active' : ''}`}
+                  aria-pressed={selected}
+                  onPointerDown={(event) => {
+                    ctrlLyricRef.current = null
+                    if (!event.ctrlKey || (event.button !== 0 && event.button !== 2)) return
+                    // macOS can turn a Control-click into a context-menu gesture.
+                    event.preventDefault()
+                    ctrlLyricRef.current = index
+                    props.onSelectLyric(index, true)
+                  }}
+                  onContextMenu={(event) => {
+                    if (event.ctrlKey || ctrlLyricRef.current === index) event.preventDefault()
+                  }}
+                  onClick={(event) => {
+                    if (event.detail > 0 && ctrlLyricRef.current === index) return
+                    props.onSelectLyric(index, event.ctrlKey)
+                  }}
                 >
                   <span>{line.text}</span>
                   {line.translation && <small>{line.translation}</small>}
                 </button>
-              ))
+              })
             ) : props.lyricsError ? (
               <div className="lyrics-empty error">
                 <CircleAlert size={24} />

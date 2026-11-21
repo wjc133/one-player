@@ -3,9 +3,32 @@ import { test } from 'node:test'
 import {
   getActiveLyricIndex,
   getNextTrackAfterFailure,
+  insertTrackNext,
   playbackTrackKey,
   seekAudio,
 } from '../src/lib/playback.ts'
+
+test('play next removes previous copies on both sides of the current track', () => {
+  const [current, target, other] = ['current', 'target', 'other'].map(id => ({ source: 'wy', id }))
+  const otherSource = { source: 'tx', id: target.id }
+  const queue = [target, other, current, target, otherSource]
+  assert.deepEqual(insertTrackNext(queue, current, target), [other, current, target, otherSource])
+  assert.deepEqual(queue, [target, other, current, target, otherSource])
+})
+
+test('play next can add a new track or prepare the queue before playback starts', () => {
+  const current = { source: 'wy', id: 'current' }
+  const target = { source: 'wy', id: 'target' }
+  assert.deepEqual(insertTrackNext([current], current, target), [current, target])
+  assert.deepEqual(insertTrackNext([current, target], null, target), [target, current])
+  assert.deepEqual(insertTrackNext([], null, target), [target])
+})
+
+test('play next keeps the active track in place when it is selected', () => {
+  const current = { source: 'wy', id: 'current' }
+  const queue = [current, { source: 'wy', id: 'next' }]
+  assert.equal(insertTrackNext(queue, current, { ...current }), queue)
+})
 
 test('failed tracks advance in queue order and consecutive failures are skipped', () => {
   const queue = ['first', 'second', 'third'].map(id => ({ source: 'wy', id }))

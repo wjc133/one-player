@@ -1,6 +1,6 @@
 [package]
 name = "one-player"
-version = "0.4.2"
+version = "0.5.0"
 description = "A focused Tauri 2 music player with LX custom source compatibility"
 authors = ["One Player Contributors"]
 license = "MIT"

@@ -220,6 +220,8 @@ export interface HttpResponsePayload {
 
 export type CloseBehavior = 'ask' | 'quit' | 'tray'
 
+export type RangeLoopUnit = 'free' | 'lyric'
+
 export interface AppSettings {
   theme: 'dark' | 'light' | 'purple' | 'system'
   playQuality: Quality
@@ -232,6 +234,7 @@ export interface AppSettings {
   showMenuBarIcon: boolean
   menuBarLyrics: boolean
   lyricFontScale: number
+  rangeLoopUnit: RangeLoopUnit
   proxy: string
 }
 

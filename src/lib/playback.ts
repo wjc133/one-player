@@ -6,6 +6,24 @@ interface PlaybackTrack {
 export const playbackTrackKey = (track: PlaybackTrack): string =>
   `${track.source}:${track.id}`
 
+export const isSameTrack = (left: PlaybackTrack, right: PlaybackTrack): boolean =>
+  left.source === right.source && left.id === right.id
+
+export function insertTrackNext<Track extends PlaybackTrack>(
+  queue: Track[],
+  currentTrack: Track | null,
+  track: Track,
+): Track[] {
+  if (currentTrack && isSameTrack(track, currentTrack)) return queue
+
+  const nextQueue = queue.filter((item) => !isSameTrack(item, track))
+  const currentIndex = currentTrack
+    ? nextQueue.findIndex((item) => isSameTrack(item, currentTrack))
+    : -1
+  nextQueue.splice(currentIndex + 1, 0, track)
+  return nextQueue
+}
+
 export function getNextTrackAfterFailure<Track extends PlaybackTrack>(
   queue: readonly Track[],
   currentTrack: Track,

@@ -25,6 +25,7 @@ import type {
 } from '../types'
 import { getBuiltinArtwork, providerNames, searchMusic } from '../lib/providers'
 import { CachedCover } from './CachedCover'
+import { Select } from './Select'
 import {
   listWalkmanMusic,
   transferWalkmanFile,
@@ -44,6 +45,11 @@ import {
   loadWalkmanArtwork,
   WalkmanArtwork,
 } from './WalkmanArtwork'
+
+const tagProviderOptions = [
+  { value: 'all' as const, label: '所有平台' },
+  ...(Object.keys(providerNames) as OnlineSourceKey[]).map((value) => ({ value, label: providerNames[value] })),
+]
 
 interface Props {
   devices: WalkmanDevice[]
@@ -341,17 +347,13 @@ export function WalkmanPage(props: Props) {
             <span className="status-dot ready" />
             <span>{device.musicDirectory}</span>
             {props.devices.length > 1 && (
-              <select
+              <Select
+                label="选择 WALKMAN 设备"
                 value={id}
-                onChange={(e) => setDeviceId(e.target.value)}
+                options={props.devices.map((device) => ({ value: device.id, label: device.name }))}
+                onChange={setDeviceId}
                 disabled={busy || editing.length > 0}
-              >
-                {props.devices.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
+              />
             )}
             <button
               className="secondary-button"
@@ -936,18 +938,13 @@ function TagEditor({
             placeholder="歌曲名、歌手或文件名"
             disabled={saving}
           />
-          <select
+          <Select
+            label="选择标签搜索平台"
             value={provider}
-            onChange={(e) => setProvider(e.target.value as typeof provider)}
+            options={tagProviderOptions}
+            onChange={setProvider}
             disabled={saving}
-          >
-            <option value="all">所有平台</option>
-            {Object.entries(providerNames).map(([key, name]) => (
-              <option value={key} key={key}>
-                {name}
-              </option>
-            ))}
-          </select>
+          />
           <button
             className="secondary-button"
             disabled={searching || saving || !query.trim()}

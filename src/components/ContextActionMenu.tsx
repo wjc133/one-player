@@ -1,27 +1,23 @@
-import { Merge, Pencil, Trash2 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { PlayList } from '../types'
 
-interface PlaylistActionMenuProps {
-  playlist: PlayList
+interface ContextActionMenuProps {
+  title: string
+  label: string
   x: number
   y: number
-  onRename: () => void
-  onMerge: () => void
-  onDelete: () => void
   onClose: () => void
+  children: ReactNode
 }
 
-export function PlaylistActionMenu({
-  playlist,
+export function ContextActionMenu({
+  title,
+  label,
   x,
   y,
-  onRename,
-  onMerge,
-  onDelete,
   onClose,
-}: PlaylistActionMenuProps) {
+  children,
+}: ContextActionMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const previousFocusRef = useRef(document.activeElement)
   const [position, setPosition] = useState({ left: x, top: y })
@@ -33,7 +29,7 @@ export function PlaylistActionMenu({
       left: Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8)),
       top: Math.max(8, Math.min(y, window.innerHeight - bounds.height - 8)),
     })
-    menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
   }, [x, y])
 
   useEffect(() => {
@@ -45,15 +41,15 @@ export function PlaylistActionMenu({
 
   return createPortal(
     <div
-      className="playlist-menu-backdrop"
+      className="context-menu-backdrop"
       onClick={onClose}
       onContextMenu={(event) => { event.preventDefault(); onClose() }}
     >
       <div
         ref={menuRef}
-        className="playlist-action-menu"
+        className="context-action-menu"
         role="menu"
-        aria-label={`${playlist.name}的歌单操作`}
+        aria-label={label}
         style={position}
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
@@ -64,7 +60,7 @@ export function PlaylistActionMenu({
           }
           if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
           event.preventDefault()
-          const buttons = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+          const buttons = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])]
           const index = buttons.findIndex((button) => button === document.activeElement)
           const next = event.key === 'Home' ? 0
             : event.key === 'End' ? buttons.length - 1
@@ -72,10 +68,8 @@ export function PlaylistActionMenu({
           buttons[next]?.focus()
         }}
       >
-        <strong>{playlist.name}</strong>
-        <button role="menuitem" onClick={onRename}><Pencil size={15} /><span>重命名</span></button>
-        <button role="menuitem" onClick={onMerge}><Merge size={15} /><span>合并到…</span></button>
-        <button role="menuitem" className="danger" onClick={onDelete}><Trash2 size={15} /><span>删除歌单…</span></button>
+        <strong>{title}</strong>
+        {children}
       </div>
     </div>,
     document.body,
