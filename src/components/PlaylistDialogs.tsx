@@ -164,10 +164,11 @@ export function PlaylistDeleteDialog(props: {
 export function PlaylistMergeDialog(props: {
   playlist: PlayList
   playlists: PlayList[]
-  onMerge: (targetId: string) => Promise<void>
+  onMerge: (targetId: string, deleteSource: boolean) => Promise<void>
   onClose: () => void
 }) {
   const [targetId, setTargetId] = useState('')
+  const [deleteSource, setDeleteSource] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const busyRef = useRef(false)
@@ -180,7 +181,7 @@ export function PlaylistMergeDialog(props: {
     setBusy(true)
     setError('')
     try {
-      await props.onMerge(targetId)
+      await props.onMerge(targetId, deleteSource)
       props.onClose()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
@@ -196,8 +197,20 @@ export function PlaylistMergeDialog(props: {
         将「{props.playlist.name}」中的 {props.playlist.tracks.length} 首歌曲合并到：
       </p>
       <PlaylistDestinationPicker playlists={destinations} value={targetId} onChange={setTargetId} disabled={busy} />
-      <p className="playlist-merge-help"><ListMusic size={14} />重复歌曲自动跳过，原歌单保留。</p>
+      <p className="playlist-merge-help">
+        <ListMusic size={14} />
+        重复歌曲自动跳过{deleteSource ? '，合并后删除原歌单。' : '，原歌单保留。'}
+      </p>
       {error && <div className="playlist-import-error" role="alert"><CircleAlert size={16} /><span>{error}</span></div>}
+      <label className={`playlist-merge-delete-source${deleteSource ? ' selected' : ''}`}>
+        <input
+          type="checkbox"
+          checked={deleteSource}
+          onChange={(event) => setDeleteSource(event.target.checked)}
+          disabled={busy}
+        />
+        <span>合并后删除原歌单「{props.playlist.name}」</span>
+      </label>
       <div className="modal-actions">
         <button type="button" className="secondary-button" onClick={props.onClose} disabled={busy}>取消</button>
         <button type="submit" className="primary-button" disabled={busy || !targetExists}>

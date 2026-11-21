@@ -1,6 +1,7 @@
-import { CircleAlert, LoaderCircle, Music2, Upload, X } from 'lucide-react'
+import { CircleAlert, LoaderCircle, Upload, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { LxMusicImportResult, LxMusicSourceSummary } from '../types'
+import { AppIcon } from './AppIcon'
 
 interface LxSourceImportModalProps {
   sources: LxMusicSourceSummary[]
@@ -76,7 +77,7 @@ export function LxSourceImportModal({ sources, busy, onImport, onClose }: LxSour
           <X size={18} />
         </button>
         <div className="playlist-import-heading">
-          <span className="modal-icon"><Music2 size={22} /></span>
+          <span className="modal-icon"><AppIcon /></span>
           <div><span className="eyebrow">LX MUSIC</span><h2 id="lx-source-import-title">选择要导入的音源</h2></div>
         </div>
         <p className="playlist-import-description">已检测到 {sources.length} 个音源，选择后添加到 One Player。</p>

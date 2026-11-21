@@ -28,11 +28,13 @@ export function mergePlaylists(
   playlists: PlayList[],
   sourceId: string,
   targetId: string,
+  deleteSource = false,
 ): PlayList[] {
   if (sourceId === targetId) throw new Error('请选择其他歌单作为合并目标')
   const source = playlists.find((playlist) => playlist.id === sourceId)
   if (!source) throw new Error('原歌单不存在，请重新选择')
-  return mergeTracksIntoPlaylist(playlists, targetId, source.tracks)
+  const merged = mergeTracksIntoPlaylist(playlists, targetId, source.tracks)
+  return deleteSource ? merged.filter((playlist) => playlist.id !== sourceId) : merged
 }
 
 export function renamePlaylist(

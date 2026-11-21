@@ -1,7 +1,7 @@
 {
   "name": "one-player",
   "private": true,
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "A desktop music player with LX-compatible custom sources, local libraries, and WALKMAN management",
   "license": "MIT",
   "repository": {

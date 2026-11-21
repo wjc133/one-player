@@ -157,16 +157,16 @@ scripts/                 工具链启动与发布校验脚本
 - `src-tauri/Cargo.toml`
 - `src-tauri/Cargo.lock` 中 `one-player` 包的版本（修改 Cargo.toml 后运行 `cd src-tauri && cargo check` 更新）
 
-例如，发布当前 `0.4.1`：
+例如，发布当前 `0.4.2`：
 
 ```bash
 pnpm release:check
 pnpm test
 git add .
-git commit -m "chore(release): 发布 v0.4.1"
-git tag -a v0.4.1 -m "One Player v0.4.1"
+git commit -m "chore(release): 发布 v0.4.2"
+git tag -a v0.4.2 -m "One Player v0.4.2"
 git push origin HEAD
-git push origin v0.4.1
+git push origin v0.4.2
 ```
 
 tag 必须与应用版本严格对应，例如版本 `0.2.0-beta.1` 对应 `v0.2.0-beta.1`；版本不一致会在打包前停止工作流。

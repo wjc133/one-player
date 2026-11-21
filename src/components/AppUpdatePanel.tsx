@@ -1,5 +1,6 @@
 import { Download, LoaderCircle, RefreshCw, X } from 'lucide-react'
 import type { AppUpdater, AppUpdateState } from '../lib/appUpdater'
+import { AppIcon } from './AppIcon'
 import { UpdateNotes } from './UpdateNotes'
 
 const phaseLabels: Record<AppUpdateState['phase'], string> = {
@@ -43,7 +44,7 @@ export function AppUpdatePanel({
   return (
     <div className="settings-card app-update-card">
       <div className="settings-card-title">
-        <div className="settings-icon accent"><RefreshCw size={19} /></div>
+        <div className="settings-icon accent"><AppIcon /></div>
         <div>
           <h2>应用更新</h2>
           <p>One Player {currentVersion ? `v${currentVersion}` : ''}</p>
@@ -135,7 +136,7 @@ export function AppUpdateConfirmation({
         }}
       >
         <button className="modal-close" aria-label="稍后安装" onClick={onClose}><X size={18} /></button>
-        <div className="modal-icon"><RefreshCw size={24} /></div>
+        <div className="modal-icon"><AppIcon /></div>
         <h2 id="app-update-title">安装并重启 One Player？</h2>
         <p>安装会停止播放并重启应用。请先完成正在进行的 WALKMAN 传输和文件编辑。</p>
         <div className="modal-actions">

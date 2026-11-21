@@ -67,6 +67,14 @@ test('merging rejects self merges and missing playlists without changing the sou
   assert.equal(existing[0].tracks.length, 1)
 })
 
+test('merging can delete the source playlist after adding unique songs', () => {
+  const existing = [playlist('source', [track(1), track(2)]), playlist('target', [track(2), track(3)])]
+  const result = mergePlaylists(existing, 'source', 'target', true)
+  assert.deepEqual(result.map((item) => item.id), ['target'])
+  assert.deepEqual(result[0].tracks.map((item) => item.songmid), ['2', '3', '1'])
+  assert.equal(existing.length, 2)
+})
+
 test('renaming trims the name and preserves IDs, tracks and import metadata', () => {
   const original = playlist('source', [track(1)], {
     importSource: { platform: 'lx', playlistId: 'one', importedAt: 100 },

@@ -1,19 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 100 100">
+  <title>OnePlayer</title>
   <defs>
-    <linearGradient id="background" x1="160" y1="120" x2="860" y2="920" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1C242E"/>
-      <stop offset="1" stop-color="#090C10"/>
+    <linearGradient id="sleeve" x1="10%" y1="0%" x2="80%" y2="100%">
+      <stop stop-color="#E1FF94"/>
+      <stop offset=".48" stop-color="#BCF76B"/>
+      <stop offset="1" stop-color="#8CDF7E"/>
     </linearGradient>
-    <linearGradient id="accent" x1="330" y1="260" x2="745" y2="770" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#B9FF91"/>
-      <stop offset="0.55" stop-color="#83EF60"/>
-      <stop offset="1" stop-color="#4BBC31"/>
+    <linearGradient id="vinyl" x1="12%" y1="92%" x2="82%" y2="6%">
+      <stop stop-color="#13251F"/>
+      <stop offset=".30" stop-color="#182825"/>
+      <stop offset=".48" stop-color="#30443E"/>
+      <stop offset=".61" stop-color="#1C2D2B"/>
+      <stop offset="1" stop-color="#111E20"/>
     </linearGradient>
+    <linearGradient id="grooves" x1="12%" y1="0%" x2="88%" y2="100%">
+      <stop stop-color="#D7F1C5" stop-opacity=".42"/>
+      <stop offset=".30" stop-color="#C2DEBD" stop-opacity=".06"/>
+      <stop offset=".6" stop-color="#C2DEBD" stop-opacity=".02"/>
+      <stop offset="1" stop-color="#C2DEBD" stop-opacity=".34"/>
+    </linearGradient>
+    <path id="record" d="M54 83.76 A34 34 0 1 0 40.65 82.69 L48.7 52.9 L39.4 58.2 Q38.7 58.6 38.3 57.8 L35 50.9 Q34.7 50.3 35.3 49.9 L54.8 36.4 Q55.7 35.8 56.6 35.8 H65.9 Q66.8 35.8 66.6 36.7 Z"/>
+    <clipPath id="face"><use href="#record"/></clipPath>
   </defs>
-  <rect width="1024" height="1024" rx="228" fill="url(#background)"/>
-  <circle cx="512" cy="512" r="314" fill="#11171E" stroke="#29333E" stroke-width="28"/>
-  <circle cx="512" cy="512" r="218" fill="none" stroke="#202A34" stroke-width="18"/>
-  <circle cx="512" cy="512" r="121" fill="url(#accent)"/>
-  <path d="M486 425c0-20 22-32 39-21l113 73c16 10 16 34 0 44l-113 73c-17 11-39-1-39-21V425Z" fill="#10170D"/>
-  <path d="M292 343c48-70 127-116 217-119" fill="none" stroke="#86EF62" stroke-linecap="round" stroke-width="22" opacity=".75"/>
+  <rect width="100" height="100" rx="22" fill="url(#sleeve)"/>
+  <use href="#record" fill="url(#vinyl)"/>
+  <g clip-path="url(#face)" stroke="url(#grooves)" stroke-width=".38" fill="none">
+    <circle cx="50" cy="50" r="30.2"/>
+    <circle cx="50" cy="50" r="27.9"/>
+    <circle cx="50" cy="50" r="25.7"/>
+  </g>
 </svg>

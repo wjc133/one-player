@@ -2,7 +2,6 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 use tauri::{
-    image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, State, WindowEvent,
@@ -60,35 +59,6 @@ impl DesktopPlayback {
     }
 }
 
-fn music_icon() -> Image<'static> {
-    let size = 36usize;
-    let mut pixels = vec![0u8; size * size * 4];
-    for row in 0..size {
-        for column in 0..size {
-            let mut coverage = 0u32;
-            for sample_y in 0..4 {
-                for sample_x in 0..4 {
-                    let x = (column as f64 + (sample_x as f64 + 0.5) / 4.0) / 2.0;
-                    let y = (row as f64 + (sample_y as f64 + 0.5) / 4.0) / 2.0;
-                    let stems = ((6.0..=7.5).contains(&x) && (4.0..=13.5).contains(&y))
-                        || ((13.0..=14.5).contains(&x) && (2.5..=12.0).contains(&y));
-                    let beam = (6.0..=14.5).contains(&x)
-                        && y >= 4.0 - (x - 6.0) * 1.5 / 8.5
-                        && y <= 6.5 - (x - 6.0) * 1.5 / 8.5;
-                    let left_note = ((x - 4.7) / 2.8).powi(2) + ((y - 13.6) / 2.2).powi(2) <= 1.0;
-                    let right_note = ((x - 11.7) / 2.8).powi(2) + ((y - 12.1) / 2.2).powi(2) <= 1.0;
-                    if stems || beam || left_note || right_note {
-                        coverage += 1;
-                    }
-                }
-            }
-            let offset = (row * size + column) * 4;
-            pixels[offset + 3] = (coverage * 255 / 16) as u8;
-        }
-    }
-    Image::new_owned(pixels, size as u32, size as u32)
-}
-
 pub fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window("main") {
         window.unminimize()?;
@@ -135,16 +105,16 @@ pub fn setup(app: &mut tauri::App) -> tauri::Result<()> {
     )?;
 
     #[cfg(target_os = "macos")]
-    let icon = music_icon();
+    let icon = tauri::include_image!("icons/menu-bar.png");
     #[cfg(not(target_os = "macos"))]
     let icon = app
         .default_window_icon()
-        .map(|icon| Image::new_owned(icon.rgba().to_vec(), icon.width(), icon.height()))
-        .unwrap_or_else(music_icon);
+        .cloned()
+        .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
-        .icon_as_template(true)
+        .icon_as_template(false)
         .tooltip("One Player")
         .menu(&menu)
         .show_menu_on_left_click(true)

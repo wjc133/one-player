@@ -1,5 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
 
+.app-icon { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+
 .walkman-entry { width: 100%; display: flex; align-items: center; gap: 17px; padding: 20px 22px; margin: 4px 0 26px; text-align: left; color: var(--text); background: linear-gradient(110deg, var(--accent-soft), var(--panel)); border: 1px solid var(--border-strong); border-radius: 15px; cursor: pointer; }
 .walkman-entry > span:nth-child(2) { display: grid; gap: 6px; flex: 1; }
 .walkman-entry strong { font-size: 15px; }
@@ -386,11 +388,7 @@ button:disabled {
   place-items: center;
   width: 39px;
   height: 39px;
-  color: var(--on-accent);
-  border-radius: 12px;
-  background:
-    linear-gradient(145deg, #b5ff8d, #6ae049 65%, #47bc2a);
-  box-shadow: 0 8px 24px rgba(105, 225, 73, 0.22);
+  flex-shrink: 0;
 }
 
 .brand > div:last-child {
@@ -1163,6 +1161,16 @@ button:disabled {
 
 .track-row:last-child {
   border-bottom: 0;
+}
+
+.playlist-track-window {
+  position: relative;
+  overflow-anchor: none;
+}
+
+.playlist-track-window > .track-row {
+  position: absolute;
+  inset-inline: 0;
 }
 
 .track-row:hover {
@@ -3316,6 +3324,11 @@ input[type='range'] {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
+.settings-icon:has(> .app-icon),
+.modal-icon:has(> .app-icon) {
+  background: transparent;
+}
+
 .modal-card > p {
   margin-top: 6px;
   color: var(--muted);
@@ -3414,6 +3427,10 @@ input[type='range'] {
 .playlist-edit-modal .playlist-merge-description, .playlist-edit-modal .playlist-delete-description { margin: 18px 0; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
 .playlist-edit-modal .playlist-merge-help { display: flex; align-items: center; gap: 7px; margin: 15px 0 0; color: var(--muted); font-size: 11px; }
 .playlist-merge-help > svg { flex-shrink: 0; color: var(--accent); }
+.playlist-merge-delete-source { display: flex; align-items: center; gap: 10px; margin: 14px 0 22px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; color: var(--muted); font-size: 11px; cursor: pointer; }
+.playlist-merge-delete-source.selected { border-color: var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.playlist-merge-delete-source input { flex-shrink: 0; width: 15px; height: 15px; margin: 0; accent-color: var(--danger); cursor: pointer; }
+.playlist-merge-delete-source span { min-width: 0; overflow-wrap: anywhere; }
 
 .playlist-create-modal {
   display: flex;

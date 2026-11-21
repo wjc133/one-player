@@ -41,8 +41,11 @@ import {
   type CSSProperties,
   type FormEvent,
   type MouseEvent,
+  type ReactNode,
   type RefObject,
+  memo,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -52,6 +55,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { isTauri } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { AppIcon } from './components/AppIcon'
 import type {
   AlbumDetail,
   AlbumSummary,
@@ -152,6 +156,9 @@ const ALBUM_COLLECTION_ID = 'favorite-albums'
 const FAVORITE_ALBUMS_STORAGE_KEY = 'one-player:favorite-albums'
 const PLAYBACK_MODE_STORAGE_KEY = 'one-player:playback-mode'
 const LOCAL_AUDIO_EXTENSIONS = ['mp3', 'flac', 'wav', 'ape', 'dsf', 'm4a', 'aac', 'ogg', 'opus', 'aiff', 'aif', 'wv']
+const PLAYLIST_TRACK_ROW_HEIGHT = 67
+const PLAYLIST_TRACK_OVERSCAN = 6
+const PLAYLIST_TRACK_WINDOW_THRESHOLD = 40
 
 type PlaybackMode = 'sequence' | 'loop' | 'one' | 'random'
 
@@ -774,13 +781,11 @@ function App() {
     ? null
     : playlists.find((playlist) => playlist.id === activePlaylistId) ?? playlists[0]
   const menuPlaylist = playlists.find((playlist) => playlist.id === playlistMenu?.playlistId)
-  const favoriteTracks = useMemo(
-    () => playlists.flatMap((playlist) => playlist.tracks),
+  const favoriteTrackIds = useMemo(
+    () => new Set(playlists.flatMap((playlist) => playlist.tracks.map(playbackTrackKey))),
     [playlists],
   )
-  const currentTrackFavorited =
-    currentTrack !== null &&
-    favoriteTracks.some((track) => isSameTrack(track, currentTrack))
+  const currentTrackFavorited = currentTrack !== null && favoriteTrackIds.has(playbackTrackKey(currentTrack))
 
   const showToast = (message: string) => {
     setToast(message)
@@ -1832,11 +1837,11 @@ function App() {
     showToast('歌单已重命名')
   }
 
-  async function handleMergePlaylist(sourceId: string, targetId: string) {
+  async function handleMergePlaylist(sourceId: string, targetId: string, deleteSource = false) {
     let previousCount = 0
     const next = await savePlaylistChange((current) => {
       previousCount = current.find((playlist) => playlist.id === targetId)?.tracks.length ?? 0
-      return mergePlaylists(current, sourceId, targetId)
+      return mergePlaylists(current, sourceId, targetId, deleteSource)
     })
     const merged = next.find((playlist) => playlist.id === targetId)!
     setActivePlaylistId(targetId)
@@ -2558,7 +2563,7 @@ function App() {
       <aside className="sidebar">
         <div className="brand" data-tauri-drag-region>
           <div className="brand-mark" data-tauri-drag-region>
-            <Music2 size={20} />
+            <AppIcon />
           </div>
           <div data-tauri-drag-region>
             <strong>ONE</strong>
@@ -2665,7 +2670,7 @@ function App() {
               results={searchResults}
               albums={albumResults}
               albumDetail={albumDetail}
-              favorites={favoriteTracks}
+              favoriteTrackIds={favoriteTrackIds}
               favoriteAlbums={favoriteAlbums}
               albumDownloadBusy={
                 albumDetail
@@ -2818,7 +2823,8 @@ function App() {
               ) : activePlaylist.tracks.length ? (
                 <TrackTable
                   tracks={activePlaylist.tracks}
-                  favorites={favoriteTracks}
+                  virtualize
+                  favoriteTrackIds={favoriteTrackIds}
                   capabilities={sourceStatus.capabilities}
                   playQuality={settings.playQuality}
                   onPlay={(track) => void playTrack(track, activePlaylist.tracks)}
@@ -3190,7 +3196,7 @@ function App() {
           key={playlistToMerge.id}
           playlist={playlistToMerge}
           playlists={playlists}
-          onMerge={(targetId) => handleMergePlaylist(playlistToMerge.id, targetId)}
+          onMerge={(targetId, deleteSource) => handleMergePlaylist(playlistToMerge.id, targetId, deleteSource)}
           onClose={() => setPlaylistToMerge(null)}
         />
       )}
@@ -3273,7 +3279,7 @@ interface SearchViewProps {
   results: MusicTrack[]
   albums: AlbumSummary[]
   albumDetail: AlbumDetail | null
-  favorites: MusicTrack[]
+  favoriteTrackIds: ReadonlySet<string>
   favoriteAlbums: SavedAlbum[]
   albumDownloadBusy: boolean
   searchedQuery: string
@@ -3507,7 +3513,7 @@ function SearchView(props: SearchViewProps) {
             </div>
             <TrackTable
               tracks={detailTracks}
-              favorites={props.favorites}
+              favoriteTrackIds={props.favoriteTrackIds}
               capabilities={props.capabilities}
               playQuality={props.playQuality}
               onPlay={(track) => props.onPlay(track, detailTracks)}
@@ -3543,7 +3549,7 @@ function SearchView(props: SearchViewProps) {
         ) : props.results.length ? (
           <TrackTable
             tracks={props.results}
-            favorites={props.favorites}
+            favoriteTrackIds={props.favoriteTrackIds}
             capabilities={props.capabilities}
             playQuality={props.playQuality}
             onPlay={(track) => props.onPlay(track, props.results)}
@@ -3560,7 +3566,8 @@ function SearchView(props: SearchViewProps) {
 
 interface TrackTableProps {
   tracks: MusicTrack[]
-  favorites: MusicTrack[]
+  virtualize?: boolean
+  favoriteTrackIds: ReadonlySet<string>
   capabilities: SourceCapabilities
   playQuality: Quality
   onPlay: (track: MusicTrack) => void
@@ -3572,15 +3579,22 @@ interface TrackTableProps {
 
 function TrackTable({
   tracks,
-  favorites,
-  capabilities,
-  playQuality,
-  onPlay,
-  onFavorite,
-  onDownload,
-  getDownloadState,
-  onOpenAlbum,
+  virtualize,
+  ...rowProps
 }: TrackTableProps) {
+  function renderRow(index: number, top?: number) {
+    const track = tracks[index]
+    return (
+      <TrackRow
+        key={`${track.id}-${index}`}
+        track={track}
+        index={index}
+        top={top}
+        {...rowProps}
+      />
+    )
+  }
+
   return (
     <div className="track-table">
       <div className="track-table-head">
@@ -3591,104 +3605,182 @@ function TrackTable({
         <span>时长</span>
         <span />
       </div>
-      {tracks.map((track, index) => {
-        const liked = favorites.some((item) => isSameTrack(item, track))
-        const playbackQuality = pickQuality(
-          track,
-          capabilities,
-          playQuality,
-        )
-        const canResolveQuality = hasPlaybackQuality(track, capabilities)
-        const highestQuality = [...track.types]
-          .sort(
-            (left, right) =>
-              qualityOrder.indexOf(right.type) - qualityOrder.indexOf(left.type),
-          )
-          .at(0)?.type
-        const downloadState = getDownloadState(track)
-        return (
-          <div
-            className={`track-row download-${downloadState.status}`}
-            key={`${track.id}-${index}`}
-          >
-            <button className="track-index" onClick={() => onPlay(track)}>
-              <span>{(index + 1).toString().padStart(2, '0')}</span>
-              <Play size={15} fill="currentColor" />
-            </button>
-            <div className="track-main">
-              <Artwork track={track} size="small" />
-              <div>
-                <strong title={track.name}>{track.name}</strong>
-                <span title={track.singer}>{track.singer || '未知歌手'}</span>
-              </div>
-            </div>
-            <button
-              className="track-album"
-              title={track.albumName}
-              disabled={!track.albumName || track.source === 'local'}
-              onClick={() => onOpenAlbum(track)}
-            >
-              {track.albumName || '—'}
-            </button>
-            <span
-              className="quality-badge"
-              title={
-                highestQuality && highestQuality !== playbackQuality
-                  ? `歌曲最高支持${qualityNames[highestQuality]}，按当前设置播放${qualityNames[playbackQuality]}`
-                  : `按当前设置播放${qualityNames[playbackQuality]}`
-              }
-            >
-              {canResolveQuality ? qualityNames[playbackQuality] : '不可用'}
-            </span>
-            <span className="track-duration">{track.interval ?? '—'}</span>
-            <div className="track-actions">
-              <button
-                className={liked ? 'liked' : ''}
-                aria-label={liked ? '取消收藏' : '收藏'}
-                onClick={() => onFavorite(track)}
-              >
-                <Heart size={17} fill={liked ? 'currentColor' : 'none'} />
-              </button>
-              <button
-                className={`download-action ${downloadState.status}`}
-                aria-label={
-                  downloadState.status === 'downloading'
-                    ? `下载中 ${downloadState.progress ?? 0}%`
-                    : downloadState.status === 'done'
-                      ? '已下载'
-                      : '下载'
-                }
-                title={
-                  downloadState.status === 'downloading'
-                    ? `下载中 ${downloadState.progress ?? 0}%`
-                    : downloadState.status === 'done'
-                      ? '已下载'
-                      : '下载'
-                }
-                disabled={downloadState.status === 'downloading' || (downloadState.status === 'done' && !downloadState.canChooseDestination)}
-                onClick={() => onDownload(track)}
-              >
-                {downloadState.status === 'downloading' ? (
-                  <CircularProgress
-                    progress={downloadState.progress}
-                    compact
-                  />
-                ) : downloadState.status === 'done' ? (
-                  <Check size={17} />
-                ) : (
-                  <Download size={17} />
-                )}
-              </button>
-              <button aria-label="播放" onClick={() => onPlay(track)}>
-                <MoreHorizontal size={18} />
-              </button>
-            </div>
-          </div>
-        )
-      })}
+      {virtualize && tracks.length > PLAYLIST_TRACK_WINDOW_THRESHOLD ? (
+        <PlaylistTrackWindow rowCount={tracks.length} renderRow={renderRow} />
+      ) : tracks.map((_, index) => renderRow(index))}
     </div>
   )
 }
+
+function PlaylistTrackWindow({
+  rowCount,
+  renderRow,
+}: {
+  rowCount: number
+  renderRow: (index: number, top: number) => ReactNode
+}) {
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const [range, setRange] = useState({ start: 0, end: 0 })
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
+
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    const viewport = body?.closest<HTMLElement>('.library-detail')
+    if (!viewport || !body) return
+
+    let frame = 0
+    const measure = () => {
+      frame = 0
+      const top = body.getBoundingClientRect().top - viewport.getBoundingClientRect().top - viewport.clientTop
+      const firstVisible = Math.floor(-top / PLAYLIST_TRACK_ROW_HEIGHT)
+      const afterVisible = Math.ceil((viewport.clientHeight - top) / PLAYLIST_TRACK_ROW_HEIGHT)
+      const start = Math.max(0, Math.min(rowCount, firstVisible - PLAYLIST_TRACK_OVERSCAN))
+      const end = Math.max(start, Math.min(rowCount, afterVisible + PLAYLIST_TRACK_OVERSCAN))
+      setRange((current) => current.start === start && current.end === end ? current : { start, end })
+    }
+    const scheduleMeasure = () => {
+      if (!frame) frame = requestAnimationFrame(measure)
+    }
+
+    measure()
+    viewport.addEventListener('scroll', scheduleMeasure, { passive: true })
+    const observer = new ResizeObserver(scheduleMeasure)
+    observer.observe(viewport)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      viewport.removeEventListener('scroll', scheduleMeasure)
+    }
+  }, [rowCount])
+
+  const end = Math.min(range.end, rowCount)
+  const rows = Array.from({ length: Math.max(0, end - range.start) }, (_, offset) => range.start + offset)
+  if (focusedIndex !== null && focusedIndex < rowCount) {
+    if (focusedIndex < range.start) rows.unshift(focusedIndex)
+    else if (focusedIndex >= end) rows.push(focusedIndex)
+  }
+  return (
+    <div
+      ref={bodyRef}
+      className="playlist-track-window"
+      style={{ height: rowCount * PLAYLIST_TRACK_ROW_HEIGHT }}
+      onFocus={(event) => {
+        const row = event.target.closest<HTMLElement>('[data-track-index]')
+        if (row) setFocusedIndex(Number(row.dataset.trackIndex))
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocusedIndex(null)
+      }}
+    >
+      {rows.map((index) => renderRow(index, index * PLAYLIST_TRACK_ROW_HEIGHT))}
+    </div>
+  )
+}
+
+const TrackRow = memo(function TrackRow({
+  track,
+  index,
+  top,
+  favoriteTrackIds,
+  capabilities,
+  playQuality,
+  onPlay,
+  onFavorite,
+  onDownload,
+  getDownloadState,
+  onOpenAlbum,
+}: Omit<TrackTableProps, 'tracks' | 'virtualize'> & { track: MusicTrack; index: number; top?: number }) {
+  const liked = favoriteTrackIds.has(playbackTrackKey(track))
+  const playbackQuality = pickQuality(track, capabilities, playQuality)
+  const canResolveQuality = hasPlaybackQuality(track, capabilities)
+  const highestQuality = [...track.types]
+    .sort(
+      (left, right) =>
+        qualityOrder.indexOf(right.type) - qualityOrder.indexOf(left.type),
+    )
+    .at(0)?.type
+  const downloadState = getDownloadState(track)
+  return (
+    <div
+      className={`track-row download-${downloadState.status}`}
+      data-track-index={index}
+      style={top === undefined ? undefined : { top, height: PLAYLIST_TRACK_ROW_HEIGHT }}
+    >
+      <button className="track-index" onClick={() => onPlay(track)}>
+        <span>{(index + 1).toString().padStart(2, '0')}</span>
+        <Play size={15} fill="currentColor" />
+      </button>
+      <div className="track-main">
+        <Artwork track={track} size="small" />
+        <div>
+          <strong title={track.name}>{track.name}</strong>
+          <span title={track.singer}>{track.singer || '未知歌手'}</span>
+        </div>
+      </div>
+      <button
+        className="track-album"
+        title={track.albumName}
+        disabled={!track.albumName || track.source === 'local'}
+        onClick={() => onOpenAlbum(track)}
+      >
+        {track.albumName || '—'}
+      </button>
+      <span
+        className="quality-badge"
+        title={
+          highestQuality && highestQuality !== playbackQuality
+            ? `歌曲最高支持${qualityNames[highestQuality]}，按当前设置播放${qualityNames[playbackQuality]}`
+            : `按当前设置播放${qualityNames[playbackQuality]}`
+        }
+      >
+        {canResolveQuality ? qualityNames[playbackQuality] : '不可用'}
+      </span>
+      <span className="track-duration">{track.interval ?? '—'}</span>
+      <div className="track-actions">
+        <button
+          className={liked ? 'liked' : ''}
+          aria-label={liked ? '取消收藏' : '收藏'}
+          onClick={() => onFavorite(track)}
+        >
+          <Heart size={17} fill={liked ? 'currentColor' : 'none'} />
+        </button>
+        <button
+          className={`download-action ${downloadState.status}`}
+          aria-label={
+            downloadState.status === 'downloading'
+              ? `下载中 ${downloadState.progress ?? 0}%`
+              : downloadState.status === 'done'
+                ? '已下载'
+                : '下载'
+          }
+          title={
+            downloadState.status === 'downloading'
+              ? `下载中 ${downloadState.progress ?? 0}%`
+              : downloadState.status === 'done'
+                ? '已下载'
+                : '下载'
+          }
+          disabled={downloadState.status === 'downloading' || (downloadState.status === 'done' && !downloadState.canChooseDestination)}
+          onClick={() => onDownload(track)}
+        >
+          {downloadState.status === 'downloading' ? (
+            <CircularProgress
+              progress={downloadState.progress}
+              compact
+            />
+          ) : downloadState.status === 'done' ? (
+            <Check size={17} />
+          ) : (
+            <Download size={17} />
+          )}
+        </button>
+        <button aria-label="播放" onClick={() => onPlay(track)}>
+          <MoreHorizontal size={18} />
+        </button>
+      </div>
+    </div>
+  )
+})
 
 function CircularProgress({
   progress,

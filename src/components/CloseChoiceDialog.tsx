@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Music2, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import type { CloseBehavior } from '../types'
+import { AppIcon } from './AppIcon'
 
 export function CloseChoiceDialog(props: {
   busy: boolean
@@ -55,10 +56,10 @@ export function CloseChoiceDialog(props: {
         >
           <X size={18} />
         </button>
-        <div className="modal-icon"><Music2 size={23} /></div>
+        <div className="modal-icon"><AppIcon /></div>
         <h2 id="close-choice-title">关闭 One Player？</h2>
         <p id="close-choice-description">
-          隐藏到菜单栏后，音乐会继续播放。点击顶部音乐图标即可找回窗口。
+          隐藏到菜单栏后，音乐会继续播放。点击顶部应用图标即可找回窗口。
           退出应用会停止播放。
         </p>
         <label className="close-choice-remember">
