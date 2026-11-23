@@ -822,6 +822,7 @@ function App() {
     [loopSelection, rangeLoopUnit, lyricRanges],
   )
   const rangeLoopActive = loopSelection !== null
+  const lyricsFocused = loopSelection?.focused === true
   const loopRanges = rangeLoop?.ranges
   const canPlayLoop = !rangeLoop || rangeLoop.ranges.length > 0
   const hasOneLoopPoint = !!rangeLoop && (rangeLoop.start === null) !== (rangeLoop.end === null)
@@ -2020,17 +2021,31 @@ function App() {
   }
 
   function toggleRangeLoop() {
-    setLoopSelection((current) => current ? null : { kind: 'points', start: null, end: null })
+    setLoopSelection((current) => {
+      if (current?.focused) return current
+      return current ? null : { kind: 'points', start: null, end: null }
+    })
+  }
+
+  function toggleLyricFocus() {
+    setLoopSelection((current) => {
+      if (!current) return current
+      if (current.focused) return { ...current, focused: false }
+      if (!rangeLoop?.lyricIndices.size) return current
+      return { ...current, unit: rangeLoopUnit, focused: true }
+    })
   }
 
   function selectLyric(index: number, modified: boolean) {
-    if (!modified && !rangeLoop) {
-      seekTo(lyricLines[index].time)
+    if (lyricsFocused || (!modified && !rangeLoop)) {
+      if (!modified) seekTo(Math.max(lyricLines[index].time, rangeLoop?.start ?? 0))
       return
     }
     setLoopSelection((current) => {
+      if (current?.focused) return current
       const indices = new Set(current?.kind === 'lyrics' ? current.indices : rangeLoop?.lyricIndices)
       if (indices.has(index)) indices.delete(index)
+      else if (rangeLoop?.lyricIndices.has(index)) return current
       else indices.add(index)
       return { kind: 'lyrics', indices, unit: current?.unit }
     })
@@ -3179,6 +3194,7 @@ function App() {
         isPlaying={isPlaying}
         isResolving={isResolving}
         rangeLoop={rangeLoop}
+        lyricsFocused={lyricsFocused}
         canToggleRangePlayback={canToggleRangePlayback}
         currentTime={currentTime}
         duration={duration}
@@ -3217,10 +3233,14 @@ function App() {
           isPlaying={isPlaying}
           isResolving={isResolving}
           rangeLoop={rangeLoop}
+          lyricsFocused={lyricsFocused}
           canToggleRangePlayback={canToggleRangePlayback}
           rangeLoopUnit={rangeLoopUnit}
-          onRangeLoopUnitChange={(unit) => setLoopSelection((current) => current && { ...current, unit })}
+          onRangeLoopUnitChange={(unit) => setLoopSelection((current) =>
+            current && !current.focused ? { ...current, unit } : current
+          )}
           onToggleRangeLoop={toggleRangeLoop}
+          onToggleLyricFocus={toggleLyricFocus}
           onSelectLyric={selectLyric}
           currentTime={currentTime}
           duration={duration}
@@ -4924,10 +4944,11 @@ interface PlaybackTimelineProps {
   currentTime: number
   duration: number
   rangeLoop: RangeLoop | null
+  lyricsFocused: boolean
   onSeek: (value: number) => void
 }
 
-function PlaybackTimeline({ currentTime, duration, rangeLoop, onSeek }: PlaybackTimelineProps) {
+function PlaybackTimeline({ currentTime, duration, rangeLoop, lyricsFocused, onSeek }: PlaybackTimelineProps) {
   const percent = (time: number) => duration ? Math.min(Math.max(time / duration * 100, 0), 100) : 0
   return (
     <div className={`playback-timeline ${rangeLoop ? 'loop-active' : ''}`}>
@@ -4955,8 +4976,8 @@ function PlaybackTimeline({ currentTime, duration, rangeLoop, onSeek }: Playback
         step="any"
         value={Math.min(currentTime, duration)}
         aria-label="播放进度"
-        aria-keyshortcuts="I O"
-        title="I 标记入点，O 标记出点"
+        aria-keyshortcuts={lyricsFocused ? undefined : 'I O'}
+        title={lyricsFocused ? undefined : 'I 标记入点，O 标记出点'}
         onChange={(event) => onSeek(Number(event.target.value))}
       />
     </div>
@@ -5194,6 +5215,7 @@ interface PlayerPageProps extends PlaybackTimelineProps {
   rangeLoopUnit: RangeLoopUnit
   onRangeLoopUnitChange: (unit: RangeLoopUnit) => void
   onToggleRangeLoop: () => void
+  onToggleLyricFocus: () => void
   onSelectLyric: (index: number, modified: boolean) => void
   lyricLines: LyricLine[]
   activeLyricIndex: number
@@ -5222,7 +5244,9 @@ function PlayerPage(props: PlayerPageProps) {
   const { src: cachedArtwork } = useCoverUrl(props.artwork, props.open)
   const lyricsScrollRef = useRef<HTMLDivElement>(null)
   const ctrlLyricRef = useRef<number | null>(null)
+  const wasLyricsFocused = useRef(false)
   const rangeMode = props.rangeLoop !== null
+  const selectedLyrics = props.rangeLoop?.lyricIndices
   const [viewport, setViewport] = useState(() => ({
     width: document.documentElement.clientWidth,
     height: document.documentElement.clientHeight,
@@ -5252,23 +5276,30 @@ function PlayerPage(props: PlayerPageProps) {
   }, [])
 
   useEffect(() => {
-    if (!props.open || rangeMode) return
+    const focusChanged = wasLyricsFocused.current !== props.lyricsFocused
+    wasLyricsFocused.current = props.lyricsFocused
+    if (!props.open || (rangeMode && !props.lyricsFocused && !focusChanged)) return
     const container = lyricsScrollRef.current
+    const scrollIndex = rangeMode && !selectedLyrics?.has(props.activeLyricIndex)
+      ? selectedLyrics?.values().next().value
+      : props.activeLyricIndex
     const activeLine = container?.querySelector<HTMLButtonElement>(
-      `[data-lyric-index="${props.activeLyricIndex}"]`,
+      `[data-lyric-index="${scrollIndex}"]`,
     )
     if (container && activeLine) {
       container.scrollTo({
         top: activeLine.offsetTop - (container.clientHeight - activeLine.offsetHeight) / 2,
-        behavior: 'smooth',
+        behavior: focusChanged ? 'instant' : 'smooth',
       })
     }
   }, [
     props.activeLyricIndex,
     props.lyricFontScale,
     props.lyricLines,
+    props.lyricsFocused,
     props.open,
     rangeMode,
+    selectedLyrics,
     viewport.width,
     viewport.height,
   ])
@@ -5411,12 +5442,24 @@ function PlayerPage(props: PlayerPageProps) {
                 className="range-loop-control"
                 aria-label="歌词循环模式"
                 aria-pressed={rangeMode}
-                title={rangeMode ? '退出歌词循环模式' : '进入歌词循环模式（I 入点，O 出点，Ctrl + 点击歌词）'}
+                disabled={props.lyricsFocused}
+                title={props.lyricsFocused ? '退出聚焦后可修改循环范围' : rangeMode ? '退出歌词循环模式' : '进入歌词循环模式（I 入点，O 出点，Ctrl + 点击歌词）'}
                 onClick={props.onToggleRangeLoop}
               >
                 <ScanLine size={15} aria-hidden="true" />
                 歌词循环
               </button>
+              {rangeMode && (
+                <button
+                  type="button"
+                  className="range-loop-control"
+                  disabled={!props.lyricsFocused && !selectedLyrics?.size}
+                  title={props.lyricsFocused ? '退出聚焦以编辑循环范围' : '聚焦循环范围内的歌词'}
+                  onClick={props.onToggleLyricFocus}
+                >
+                  {props.lyricsFocused ? '退出聚焦' : '聚焦'}
+                </button>
+              )}
               <button
                 type="button"
                 aria-label="缩小歌词字号"
@@ -5469,6 +5512,7 @@ function PlayerPage(props: PlayerPageProps) {
                 <Select
                   label="当前歌词循环最小单位"
                   variant="player"
+                  disabled={props.lyricsFocused}
                   value={props.rangeLoopUnit}
                   options={rangeLoopUnitOptions}
                   onChange={props.onRangeLoopUnitChange}
@@ -5484,12 +5528,13 @@ function PlayerPage(props: PlayerPageProps) {
               </div>
             ) : props.lyricLines.length ? (
               props.lyricLines.map((line, index) => {
-                const selected = props.rangeLoop?.lyricIndices.has(index)
+                const selected = selectedLyrics?.has(index)
+                if (props.lyricsFocused && !selected) return null
                 return <button
                   key={`${line.time}-${index}`}
                   data-lyric-index={index}
                   className={`lyric-line ${props.activeLyricIndex === index ? 'active' : ''}`}
-                  aria-pressed={selected}
+                  aria-pressed={props.lyricsFocused ? undefined : selected}
                   onPointerDown={(event) => {
                     ctrlLyricRef.current = null
                     if (!event.ctrlKey || (event.button !== 0 && event.button !== 2)) return

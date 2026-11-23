@@ -3247,14 +3247,16 @@ input[type='range'].timeline-slider {
 }
 
 .lyrics-heading > span {
+  flex-shrink: 0;
   font-size: 14px;
   font-weight: 700;
 }
 
 .lyrics-font-controls {
   display: flex;
-  flex-shrink: 0;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
   margin-left: auto;
 }

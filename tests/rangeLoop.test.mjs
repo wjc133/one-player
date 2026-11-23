@@ -46,16 +46,25 @@ test('empty, incomplete, equal or reversed markers keep the loop inactive', () =
   assert.deepEqual(resolveRangeLoop(lineSelection(), 'free', lyrics).ranges, [])
 })
 
-test('adjacent lyric lines play continuously and unselected gaps are skipped', () => {
-  const loop = resolveRangeLoop(lineSelection(3, 0, 1), 'free', lyrics)
-  assert.deepEqual(loop.ranges, [{ start: 10, end: 21 }, { start: 26, end: 28 }])
+test('nonconsecutive lyric selections include and play every intervening line', () => {
+  const loop = resolveRangeLoop(lineSelection(3, 0), 'free', lyrics)
+  assert.deepEqual(loop.ranges, [{ start: 10, end: 28 }])
+  assert.deepEqual([...loop.lyricIndices], [0, 1, 2, 3])
   assert.equal(getLoopSeekTarget(loop.ranges, 5), 10)
   assert.equal(getLoopSeekTarget(loop.ranges, 10), null)
   assert.equal(getLoopSeekTarget(loop.ranges, 17), null)
-  assert.equal(getLoopSeekTarget(loop.ranges, 21), 26)
-  assert.equal(getLoopSeekTarget(loop.ranges, 25.99), 26)
+  assert.equal(getLoopSeekTarget(loop.ranges, 21), null)
   assert.equal(getLoopSeekTarget(loop.ranges, 27.99), null)
   assert.equal(getLoopSeekTarget(loop.ranges, 28), 10)
+})
+
+test('focused loops keep their range when marking an in or out point', () => {
+  for (const selection of [points(10, 21), lineSelection(0, 1)]) {
+    const focused = { ...selection, focused: true }
+    const loop = resolveRangeLoop(focused, 'free', lyrics)
+    assert.equal(markRangeLoopPoint(focused, loop, 'start', 17), focused)
+    assert.equal(markRangeLoopPoint(focused, loop, 'end', 26), focused)
+  }
 })
 
 test('duplicate lyric timestamps share a range and lines at or after the track end have no audio', () => {
@@ -63,5 +72,7 @@ test('duplicate lyric timestamps share a range and lines at or after the track e
   assert.deepEqual(ranges, [
     { start: 0, end: 2 }, { start: 2, end: 4 }, { start: 2, end: 4 }, { start: 4, end: 6 }, null, null,
   ])
-  assert.deepEqual(resolveRangeLoop(lineSelection(2, 4), 'lyric', ranges).ranges, [{ start: 2, end: 4 }])
+  const loop = resolveRangeLoop(lineSelection(2, 4), 'lyric', ranges)
+  assert.deepEqual(loop.ranges, [{ start: 2, end: 4 }])
+  assert.deepEqual([...loop.lyricIndices], [1, 2])
 })

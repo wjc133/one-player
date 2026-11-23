@@ -13,7 +13,7 @@ interface LoopPoints {
 export type RangeLoopSelection = (
   | ({ kind: 'points' } & LoopPoints)
   | { kind: 'lyrics'; indices: ReadonlySet<number> }
-) & { unit?: RangeLoopUnit }
+) & { unit?: RangeLoopUnit; focused?: boolean }
 
 export interface RangeLoop extends LoopPoints {
   ranges: PlaybackRange[]
@@ -26,6 +26,7 @@ export function markRangeLoopPoint(
   point: keyof LoopPoints,
   time: number,
 ): RangeLoopSelection | null {
+  if (selection?.focused) return selection
   const { start = null, end = null } = (selection?.kind === 'points' ? selection : visiblePoints) ?? {}
   if (point === 'end') {
     if (start === null || time <= start) return selection
@@ -79,28 +80,27 @@ export function resolveRangeLoop(
   lyricRanges: ReadonlyArray<PlaybackRange | null>,
 ): RangeLoop {
   const ranges: PlaybackRange[] = []
+  let start = null
+  let end = null
   if (selection.kind === 'lyrics') {
-    lyricRanges.forEach((range, index) => {
-      if (!range || !selection.indices.has(index)) return
-      const last = ranges.at(-1)
-      if (last && range.start <= last.end) last.end = Math.max(last.end, range.end)
-      else ranges.push({ ...range })
-    })
-    return {
-      start: ranges[0]?.start ?? null,
-      end: ranges.at(-1)?.end ?? null,
-      ranges,
-      lyricIndices: selection.indices,
+    for (const index of selection.indices) {
+      const range = lyricRanges[index]
+      if (!range) continue
+      start = Math.min(start ?? range.start, range.start)
+      end = Math.max(end ?? range.end, range.end)
     }
+  } else {
+    start = selection.start
+    end = selection.end
   }
 
-  const { start, end } = selection
   const lyricIndices = new Set<number>()
   if (start !== null && end !== null && end <= start) {
     return { start, end, ranges, lyricIndices }
   }
-  const first = unit === 'lyric' && start !== null ? closestLyricRange(lyricRanges, start, 'start') : null
-  const last = unit === 'lyric' && end !== null ? closestLyricRange(lyricRanges, end, 'end') : null
+  const snapToLyrics = selection.kind === 'points' && unit === 'lyric'
+  const first = snapToLyrics && start !== null ? closestLyricRange(lyricRanges, start, 'start') : null
+  const last = snapToLyrics && end !== null ? closestLyricRange(lyricRanges, end, 'end') : null
   let loopStart = first?.start ?? start
   let loopEnd = last?.end ?? end
   if (start !== null && end !== null && loopStart !== null && loopEnd !== null) {
