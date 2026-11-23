@@ -74,10 +74,13 @@ import type {
   LxMusicSourceStatus,
   PlaylistImportSource,
   LyricPayload,
+  LyricStudyProvider,
+  LyricStudySettings,
   MusicTrack,
   OnlineSourceKey,
   PlayList,
   Quality,
+  RangeLoopRate,
   RangeLoopUnit,
   SavedAlbum,
   SourceCapabilities,
@@ -115,6 +118,13 @@ import {
   type RangeLoop,
   type RangeLoopSelection,
 } from './lib/rangeLoop'
+import {
+  defaultLyricStudySettings,
+  getLyricStudyEndpoint,
+  lyricStudyProviders,
+  normalizeLyricStudySettings,
+} from './lib/lyricStudy'
+import { useLyricStudy } from './lib/useLyricStudy'
 import { CloseChoiceDialog } from './components/CloseChoiceDialog'
 import { mergeImportedPlaylists } from './lib/playlistImport'
 import { mergePlaylists, mergeTracksIntoPlaylist, renamePlaylist } from './lib/playlists'
@@ -163,7 +173,7 @@ import {
 
 type View = 'search' | 'library' | 'downloads' | 'walkman' | 'settings'
 type SearchMode = 'track' | 'album'
-type SettingsTab = 'general' | 'sources' | 'updates'
+type SettingsTab = 'general' | 'lyrics' | 'sources' | 'updates'
 
 const PLAYER_PAGE_TRANSITION_MS = 520
 const PLAYBACK_FADE_MS = 300
@@ -234,6 +244,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   menuBarLyrics: false,
   lyricFontScale: 100,
   rangeLoopUnit: 'free',
+  rangeLoopRate: '1',
+  lyricStudy: defaultLyricStudySettings,
   proxy: '',
 }
 
@@ -250,6 +262,11 @@ const rangeLoopUnitOptions = [
   { value: 'free', label: '自由' },
   { value: 'lyric', label: '歌词' },
 ] as const
+const rangeLoopRateOptions = (['0.3', '0.5', '0.7', '1'] as const).map((value) => ({ value, label: `${value}x` }))
+const lyricStudyProviderOptions = (Object.keys(lyricStudyProviders) as LyricStudyProvider[]).map((value) => ({
+  value,
+  label: lyricStudyProviders[value].label,
+}))
 const closeBehaviorOptions = [
   { value: 'ask', label: '每次询问' },
   { value: 'tray', label: '隐藏到菜单栏' },
@@ -274,6 +291,10 @@ const loadSettings = (): AppSettings => {
     settings.closeBehavior = 'ask'
   }
   if (settings.rangeLoopUnit !== 'lyric') settings.rangeLoopUnit = DEFAULT_SETTINGS.rangeLoopUnit
+  if (!rangeLoopRateOptions.some(({ value }) => value === settings.rangeLoopRate)) {
+    settings.rangeLoopRate = DEFAULT_SETTINGS.rangeLoopRate
+  }
+  settings.lyricStudy = normalizeLyricStudySettings(settings.lyricStudy)
   if (
     !Number.isInteger(settings.songCacheSizeMb) ||
     settings.songCacheSizeMb < 0 ||
@@ -823,6 +844,7 @@ function App() {
   )
   const rangeLoopActive = loopSelection !== null
   const lyricsFocused = loopSelection?.focused === true
+  const playbackRate = rangeLoopActive ? Number(settings.rangeLoopRate) : 1
   const loopRanges = rangeLoop?.ranges
   const canPlayLoop = !rangeLoop || rangeLoop.ranges.length > 0
   const hasOneLoopPoint = !!rangeLoop && (rangeLoop.start === null) !== (rangeLoop.end === null)
@@ -878,6 +900,13 @@ function App() {
 
   useLayoutEffect(() => {
     const audio = audioRef.current
+    if (!audio) return
+    audio.defaultPlaybackRate = playbackRate
+    audio.playbackRate = playbackRate
+  }, [audioSource, playbackRate])
+
+  useLayoutEffect(() => {
+    const audio = audioRef.current
     if (!audio || !audioSource || !loopRanges) return
     if (!loopRanges.length) {
       if (hasOneLoopPoint) return
@@ -899,7 +928,12 @@ function App() {
       }
       const range = loopRanges.find((range) => position < range.end)
       if (range) {
-        timer = window.setTimeout(update, Math.max(10, (range.end - position) * 1000 / audio.playbackRate))
+        const nextIndex = getActiveLyricIndex(lyricLines, position) + 1
+        const boundary = Math.min(range.end, lyricLines[nextIndex]?.time ?? Infinity)
+        timer = window.setTimeout(() => {
+          update()
+          if (!audio.seeking) setCurrentTime(audio.currentTime)
+        }, Math.max(10, (boundary - position) * 1000 / audio.playbackRate))
       }
     }
 
@@ -910,7 +944,7 @@ function App() {
       window.clearTimeout(timer)
       for (const event of events) audio.removeEventListener(event, update)
     }
-  }, [audioSource, hasOneLoopPoint, loopRanges])
+  }, [audioSource, hasOneLoopPoint, loopRanges, lyricLines])
 
   const activeSource = sources.find((source) => source.id === activeSourceId)
   const showingFavoriteAlbums = activePlaylistId === ALBUM_COLLECTION_ID
@@ -3236,6 +3270,8 @@ function App() {
           lyricsFocused={lyricsFocused}
           canToggleRangePlayback={canToggleRangePlayback}
           rangeLoopUnit={rangeLoopUnit}
+          rangeLoopRate={settings.rangeLoopRate}
+          onRangeLoopRateChange={(rangeLoopRate) => setSettings((current) => ({ ...current, rangeLoopRate }))}
           onRangeLoopUnitChange={(unit) => setLoopSelection((current) =>
             current && !current.focused ? { ...current, unit } : current
           )}
@@ -3248,6 +3284,8 @@ function App() {
           activeLyricIndex={activeLyricIndex}
           lyricsLoading={lyricsLoading}
           lyricsError={lyricsError}
+          lyricStudySettings={settings.lyricStudy}
+          proxy={settings.proxy}
           lyricFontScale={settings.lyricFontScale}
           onLyricFontScaleChange={(lyricFontScale) =>
             setSettings((current) => ({
@@ -4442,7 +4480,7 @@ function SettingsView(props: SettingsViewProps) {
       </div>
 
       <div className="settings-tabs" role="tablist" aria-label="设置分类">
-        {([['general', '通用'], ['sources', '音源'], ['updates', '应用更新']] as const).map(([tab, label], index, tabs) => (
+        {([['general', '通用'], ['lyrics', '歌词循环'], ['sources', '音源'], ['updates', '应用更新']] as const).map(([tab, label], index, tabs) => (
           <button
             key={tab}
             id={`settings-tab-${tab}`}
@@ -4500,14 +4538,6 @@ function SettingsView(props: SettingsViewProps) {
               value={props.settings.playQuality}
               options={qualityOptions}
               onChange={(playQuality) => props.setSettings((current) => ({ ...current, playQuality }))}
-            />
-          </SettingRow>
-          <SettingRow label="默认歌词循环最小单位" description="进入歌词循环模式时使用，可在歌词工具栏临时切换">
-            <Select
-              label="默认歌词循环最小单位"
-              value={props.settings.rangeLoopUnit}
-              options={rangeLoopUnitOptions}
-              onChange={(rangeLoopUnit) => props.setSettings((current) => ({ ...current, rangeLoopUnit }))}
             />
           </SettingRow>
           <SettingRow
@@ -4657,7 +4687,7 @@ function SettingsView(props: SettingsViewProps) {
               <span />
             </label>
           </SettingRow>
-          <SettingRow label="HTTP 代理" description="自定义源请求、搜索和下载共用">
+          <SettingRow label="HTTP 代理" description="自定义源请求、搜索、下载和 AI 注音共用">
             <input
               className="setting-input"
               value={props.settings.proxy}
@@ -4672,6 +4702,7 @@ function SettingsView(props: SettingsViewProps) {
           </SettingRow>
         </div>
         )}
+        {props.tab === 'lyrics' && <LyricLoopSettings settings={props.settings} setSettings={props.setSettings} />}
         {props.tab === 'updates' && props.updatePanel}
 
         {props.tab === 'sources' && (
@@ -4829,6 +4860,140 @@ function SettingsView(props: SettingsViewProps) {
         )}
       </div>
     </section>
+  )
+}
+
+function LyricLoopSettings({ settings, setSettings }: Pick<SettingsViewProps, 'settings' | 'setSettings'>) {
+  const { lyricStudy } = settings
+  const preset = lyricStudyProviders[lyricStudy.provider]
+  function updateStudy(update: Partial<LyricStudySettings>) {
+    setSettings((current) => ({ ...current, lyricStudy: { ...current.lyricStudy, ...update } }))
+  }
+
+  function changeBaseUrl(baseUrl: string) {
+    setSettings((current) => {
+      if (current.lyricStudy.baseUrl === baseUrl) return current
+      const previous = getLyricStudyEndpoint(current.lyricStudy.baseUrl)
+      const next = getLyricStudyEndpoint(baseUrl)
+      const changedOrigin = previous && (!next || new URL(previous).origin !== new URL(next).origin)
+      return {
+        ...current,
+        lyricStudy: { ...current.lyricStudy, baseUrl, apiKey: changedOrigin ? '' : current.lyricStudy.apiKey },
+      }
+    })
+  }
+
+  return (
+    <div className="lyric-loop-settings">
+      <div className="settings-card">
+        <div className="settings-card-title">
+          <div className="settings-icon"><ScanLine size={19} /></div>
+          <div><h2>歌词循环</h2></div>
+        </div>
+        <SettingRow label="默认歌词循环最小单位" description="进入歌词循环模式时使用，可在歌词面板临时切换">
+          <Select
+            label="默认歌词循环最小单位"
+            value={settings.rangeLoopUnit}
+            options={rangeLoopUnitOptions}
+            onChange={(rangeLoopUnit) => setSettings((current) => ({ ...current, rangeLoopUnit }))}
+          />
+        </SettingRow>
+        <SettingRow label="歌词循环倍速" description="也可在歌词面板切换，退出歌词循环后恢复 1x">
+          <Select
+            label="歌词循环倍速"
+            value={settings.rangeLoopRate}
+            options={rangeLoopRateOptions}
+            onChange={(rangeLoopRate) => setSettings((current) => ({ ...current, rangeLoopRate }))}
+          />
+        </SettingRow>
+      </div>
+      <div className="settings-card">
+        <div className="settings-card-title">
+          <div className="settings-icon"><Subtitles size={19} /></div>
+          <div>
+            <h2>AI 辅助学歌词</h2>
+            <p>英语逐词标音标，日语分词标假名。</p>
+          </div>
+        </div>
+        <SettingRow label="启用 AI 辅助学歌词">
+          <label className="switch">
+            <input
+              type="checkbox"
+              aria-label="启用 AI 辅助学歌词"
+              checked={lyricStudy.enabled}
+              onChange={(event) => updateStudy({ enabled: event.target.checked })}
+            />
+            <span />
+          </label>
+        </SettingRow>
+        <SettingRow label="AI 服务商">
+          <Select
+            label="AI 服务商"
+            disabled={!lyricStudy.enabled}
+            value={lyricStudy.provider}
+            options={lyricStudyProviderOptions}
+            onChange={(provider) => updateStudy({ provider, model: lyricStudyProviders[provider].model, baseUrl: '', apiKey: '' })}
+          />
+        </SettingRow>
+        <SettingRow label="API 地址">
+          {lyricStudy.provider === 'custom' ? (
+            <input
+              key="custom-address"
+              className="setting-input lyric-study-input"
+              aria-label="API 地址"
+              disabled={!lyricStudy.enabled}
+              aria-invalid={!!lyricStudy.baseUrl && !getLyricStudyEndpoint(lyricStudy.baseUrl)}
+              type="url"
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="https://example.com/v1"
+              defaultValue={lyricStudy.baseUrl}
+              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+              onBlur={(event) => changeBaseUrl(event.currentTarget.value.trim())}
+            />
+          ) : (
+            <input className="setting-input lyric-study-input" aria-label="API 地址" disabled={!lyricStudy.enabled} readOnly value={preset.baseUrl} />
+          )}
+        </SettingRow>
+        <SettingRow label="模型名称">
+          <input
+            className="setting-input lyric-study-input"
+            aria-label="模型名称"
+            disabled={!lyricStudy.enabled}
+            spellCheck={false}
+            autoComplete="off"
+            value={lyricStudy.model}
+            onChange={(event) => updateStudy({ model: event.target.value })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="API Key"
+          description={lyricStudy.provider === 'custom' ? '保存在本机。服务无需鉴权时可留空。' : '保存在本机，仅用于所选 AI 服务。'}
+        >
+          <input
+            className="setting-input lyric-study-input"
+            aria-label="API Key"
+            disabled={!lyricStudy.enabled}
+            type="password"
+            autoComplete="off"
+            value={lyricStudy.apiKey}
+            onChange={(event) => updateStudy({ apiKey: event.target.value })}
+          />
+        </SettingRow>
+        <SettingRow label="进入聚焦时自动注音" description="注音时会把聚焦范围内的原词发送给所选服务商。关闭时可在聚焦模式手动请求。">
+          <label className="switch">
+            <input
+              type="checkbox"
+              aria-label="进入聚焦时自动注音"
+              disabled={!lyricStudy.enabled}
+              checked={lyricStudy.automatic}
+              onChange={(event) => updateStudy({ automatic: event.target.checked })}
+            />
+            <span />
+          </label>
+        </SettingRow>
+      </div>
+    </div>
   )
 }
 
@@ -5213,6 +5378,8 @@ interface PlayerPageProps extends PlaybackTimelineProps {
   isResolving: boolean
   canToggleRangePlayback: boolean
   rangeLoopUnit: RangeLoopUnit
+  rangeLoopRate: RangeLoopRate
+  onRangeLoopRateChange: (rate: RangeLoopRate) => void
   onRangeLoopUnitChange: (unit: RangeLoopUnit) => void
   onToggleRangeLoop: () => void
   onToggleLyricFocus: () => void
@@ -5221,6 +5388,8 @@ interface PlayerPageProps extends PlaybackTimelineProps {
   activeLyricIndex: number
   lyricsLoading: boolean
   lyricsError: string
+  lyricStudySettings: LyricStudySettings
+  proxy: string
   lyricFontScale: number
   onLyricFontScaleChange: (value: number) => void
   isFavorite: boolean
@@ -5247,6 +5416,13 @@ function PlayerPage(props: PlayerPageProps) {
   const wasLyricsFocused = useRef(false)
   const rangeMode = props.rangeLoop !== null
   const selectedLyrics = props.rangeLoop?.lyricIndices
+  const studyEnabled = props.lyricStudySettings.enabled
+  const studyLines = useMemo(() => {
+    if (!studyEnabled || !props.open || !props.lyricsFocused || !selectedLyrics) return null
+    return Array.from(selectedLyrics, (id) => ({ id, text: props.lyricLines[id].text }))
+  }, [studyEnabled, props.open, props.lyricsFocused, props.lyricLines, selectedLyrics])
+  const study = useLyricStudy(studyLines, props.lyricStudySettings, props.proxy)
+  const annotations = study.result?.annotations
   const [viewport, setViewport] = useState(() => ({
     width: document.documentElement.clientWidth,
     height: document.documentElement.clientHeight,
@@ -5293,6 +5469,7 @@ function PlayerPage(props: PlayerPageProps) {
       })
     }
   }, [
+    annotations,
     props.activeLyricIndex,
     props.lyricFontScale,
     props.lyricLines,
@@ -5507,17 +5684,47 @@ function PlayerPage(props: PlayerPageProps) {
                   </span>
                 )}
               </div>
-              <div className="lyrics-range-unit">
-                最小单位
-                <Select
-                  label="当前歌词循环最小单位"
-                  variant="player"
-                  disabled={props.lyricsFocused}
-                  value={props.rangeLoopUnit}
-                  options={rangeLoopUnitOptions}
-                  onChange={props.onRangeLoopUnitChange}
-                />
+              <div className="lyrics-range-controls">
+                <div className="lyrics-range-unit">
+                  最小单位
+                  <Select
+                    label="当前歌词循环最小单位"
+                    variant="player"
+                    disabled={props.lyricsFocused}
+                    value={props.rangeLoopUnit}
+                    options={rangeLoopUnitOptions}
+                    onChange={props.onRangeLoopUnitChange}
+                  />
+                </div>
+                <div className="lyrics-range-unit">
+                  倍速
+                  <Select
+                    label="当前歌词循环倍速"
+                    variant="player"
+                    value={props.rangeLoopRate}
+                    options={rangeLoopRateOptions}
+                    onChange={props.onRangeLoopRateChange}
+                  />
+                </div>
               </div>
+            </div>
+          )}
+          {!!studyLines?.length && (!study.result || study.result.incomplete || !annotations?.size) && (
+            <div className="lyrics-study-controls">
+              {study.configured && (!study.result || study.result.incomplete) && (
+                <button
+                  type="button"
+                  disabled={study.loading}
+                  onClick={study.analyze}
+                >
+                  {study.loading ? '正在注音…' : study.error || study.result?.incomplete ? '重试注音' : 'AI 注音'}
+                </button>
+              )}
+              <span role="status">
+                {!study.configured ? '在「设置 → 歌词循环」配置 AI 注音。'
+                  : study.error ?? (study.result?.incomplete ? '部分歌词未能注音。'
+                  : study.result && !annotations?.size ? '选区没有可注音的英语或日语歌词。' : '')}
+              </span>
             </div>
           )}
           <div className="lyrics-scroll" ref={lyricsScrollRef}>
@@ -5530,6 +5737,7 @@ function PlayerPage(props: PlayerPageProps) {
               props.lyricLines.map((line, index) => {
                 const selected = selectedLyrics?.has(index)
                 if (props.lyricsFocused && !selected) return null
+                const segments = annotations?.get(index)
                 return <button
                   key={`${line.time}-${index}`}
                   data-lyric-index={index}
@@ -5551,7 +5759,11 @@ function PlayerPage(props: PlayerPageProps) {
                     props.onSelectLyric(index, event.ctrlKey)
                   }}
                 >
-                  <span>{line.text}</span>
+                  <span className={segments ? 'lyric-annotated' : undefined}>
+                    {segments?.map((segment, segmentIndex) => segment.reading ? (
+                      <ruby key={segmentIndex}>{segment.text}<rt>{segment.reading}</rt></ruby>
+                    ) : segment.text) ?? line.text}
+                  </span>
                   {line.translation && <small>{line.translation}</small>}
                 </button>
               })

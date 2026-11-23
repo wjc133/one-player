@@ -221,6 +221,18 @@ export interface HttpResponsePayload {
 export type CloseBehavior = 'ask' | 'quit' | 'tray'
 
 export type RangeLoopUnit = 'free' | 'lyric'
+export type RangeLoopRate = '0.3' | '0.5' | '0.7' | '1'
+
+export type LyricStudyProvider = 'siliconflow' | 'deepseek' | 'custom'
+
+export interface LyricStudySettings {
+  enabled: boolean
+  provider: LyricStudyProvider
+  baseUrl: string
+  model: string
+  apiKey: string
+  automatic: boolean
+}
 
 export interface AppSettings {
   theme: 'dark' | 'light' | 'purple' | 'system'
@@ -235,6 +247,8 @@ export interface AppSettings {
   menuBarLyrics: boolean
   lyricFontScale: number
   rangeLoopUnit: RangeLoopUnit
+  rangeLoopRate: RangeLoopRate
+  lyricStudy: LyricStudySettings
   proxy: string
 }
 

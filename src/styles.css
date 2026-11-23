@@ -1979,6 +1979,11 @@ button.track-album:disabled {
   background: var(--panel-soft);
 }
 
+.lyric-loop-settings {
+  display: grid;
+  gap: 16px;
+}
+
 .app-update-content {
   display: grid;
   padding: 20px;
@@ -2314,6 +2319,16 @@ div.update-notes :is(h4, h5, h6) {
 
 .setting-input {
   width: 210px;
+}
+
+.lyric-study-input {
+  width: min(55%, 320px);
+}
+
+.lyric-study-input:disabled,
+.lyric-loop-settings .switch input:disabled + span {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .path-control {
@@ -3343,9 +3358,38 @@ input[type='range'].timeline-slider {
   gap: 6px;
 }
 
+.lyrics-range-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
 .lyrics-range-unit .select-trigger {
   height: 27px;
   padding-inline: 8px;
+}
+
+.lyrics-study-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 8px 0;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 11px;
+}
+
+.lyrics-study-controls button {
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+}
+
+.lyrics-study-controls button:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .lyrics-scroll {
@@ -3394,6 +3438,22 @@ input[type='range'].timeline-slider {
   line-height: 1.45;
   letter-spacing: -0.025em;
   overflow-wrap: anywhere;
+}
+
+.lyric-line > .lyric-annotated {
+  line-height: 1.75;
+}
+
+.lyric-annotated ruby {
+  margin-inline: 0.06em;
+  letter-spacing: normal;
+  ruby-position: over;
+}
+
+.lyric-annotated rt {
+  font-size: 0.52em;
+  font-weight: 500;
+  opacity: 0.8;
 }
 
 .lyric-line small {
