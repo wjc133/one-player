@@ -4,6 +4,7 @@ import {
   analyzeLyrics,
   getLyricStudyConnection,
   getLyricStudyEndpoint,
+  groupLyricWords,
   normalizeLyricStudySettings,
   parseLyricStudyResponse,
 } from '../src/lib/lyricStudy.ts'
@@ -44,12 +45,31 @@ test('aligns English IPA and Japanese kana above the exact lyric words and leave
   ]), lines)
   assert.equal(result.incomplete, false)
   assert.deepEqual([...result.annotations.keys()], [5, 6])
-  assert.deepEqual(result.annotations.get(5), [
-    token("I'll", 'aɪl'), { text: ' ' }, token('wait', 'weɪt'), { text: ', ' }, token('wait', 'weɪt'), { text: '!' },
+  assert.deepEqual(result.annotations.get(5), {
+    language: 'en',
+    segments: [
+      token("I'll", 'aɪl'), { text: ' ' }, token('wait', 'weɪt'), { text: ', ' }, token('wait', 'weɪt'), { text: '!' },
+    ],
+  })
+  assert.deepEqual(result.annotations.get(6), {
+    language: 'ja',
+    segments: [
+      token('君', 'きみ'), token('を', 'を'), token('待つ', 'まつ'), { text: '。' },
+    ],
+  })
+})
+
+test('groups Japanese segments into words with attached punctuation', () => {
+  assert.deepEqual(groupLyricWords([token('君', 'きみ'), token('を', 'を'), token('待つ', 'まつ'), { text: '。' }]), [
+    { segments: [token('君', 'きみ')], text: '君' },
+    { segments: [token('を', 'を')], text: 'を' },
+    { segments: [token('待つ', 'まつ'), { text: '。' }], text: '待つ' },
   ])
-  assert.deepEqual(result.annotations.get(6), [
-    token('君', 'きみ'), token('を', 'を'), token('待つ', 'まつ'), { text: '。' },
+  assert.deepEqual(groupLyricWords([{ text: '「' }, token('君', 'きみ'), { text: '」' }]), [
+    { segments: [{ text: '「' }, token('君', 'きみ'), { text: '」' }], text: '君' },
   ])
+  assert.deepEqual(groupLyricWords([{ text: '…' }]), [{ segments: [{ text: '…' }], text: '' }])
+  assert.deepEqual(groupLyricWords([]), [])
 })
 
 test('keeps the original line when the model splits a contraction or returns invalid kana', () => {

@@ -3456,6 +3456,36 @@ input[type='range'].timeline-slider {
   opacity: 0.8;
 }
 
+.lyric-line > .lyric-japanese {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: flex-end;
+  column-gap: 0.45em;
+  row-gap: 0.1em;
+}
+
+.lyric-word {
+  display: inline-block;
+  padding: 0 0.12em;
+  border-radius: 5px;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.lyrics-paused .lyric-word {
+  cursor: pointer;
+}
+
+.lyrics-paused .lyric-word:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.lyric-word.speaking {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+}
+
 .lyric-line small {
   display: block;
   margin-top: 5px;

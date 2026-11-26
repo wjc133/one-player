@@ -71,8 +71,18 @@ export interface LyricStudySegment {
   reading?: string
 }
 
+export interface LyricStudyAnnotation {
+  language: 'en' | 'ja'
+  segments: readonly LyricStudySegment[]
+}
+
+export interface LyricStudyWord {
+  segments: LyricStudySegment[]
+  text: string
+}
+
 export interface LyricStudyResult {
-  annotations: ReadonlyMap<number, readonly LyricStudySegment[]>
+  annotations: ReadonlyMap<number, LyricStudyAnnotation>
   incomplete: boolean
 }
 
@@ -123,8 +133,22 @@ function alignLyricTokens(text: string, tokens: unknown, language: 'en' | 'ja'):
   return segments
 }
 
+export function groupLyricWords(segments: readonly LyricStudySegment[]): LyricStudyWord[] {
+  const words: LyricStudyWord[] = []
+  let leading: LyricStudySegment[] = []
+  for (const segment of segments) {
+    if (segment.reading) {
+      words.push({ segments: [...leading, segment], text: segment.text })
+      leading = []
+    } else if (words.length) words[words.length - 1].segments.push(segment)
+    else leading.push(segment)
+  }
+  if (!words.length && leading.length) return [{ segments: leading, text: '' }]
+  return words
+}
+
 export function parseLyricStudyResponse(body: string, lines: readonly LyricStudyLine[]): LyricStudyResult {
-  const annotations = new Map<number, readonly LyricStudySegment[]>()
+  const annotations = new Map<number, LyricStudyAnnotation>()
   const source = new Map(lines.map(({ id, text }) => [id, text]))
   try {
     const completion = JSON.parse(body) as { choices?: { message?: { content?: unknown } }[] }
@@ -141,7 +165,7 @@ export function parseLyricStudyResponse(body: string, lines: readonly LyricStudy
       source.delete(line.id)
       if (line.language !== 'en' && line.language !== 'ja') continue
       const segments = alignLyricTokens(text, line.tokens, line.language)
-      if (segments) annotations.set(line.id, segments)
+      if (segments) annotations.set(line.id, { language: line.language, segments })
       else incomplete = true
     }
     incomplete ||= source.size > 0
@@ -179,7 +203,7 @@ export async function analyzeLyrics(
   }
   if (batch.length) batches.push(batch)
 
-  const annotations = new Map<number, readonly LyricStudySegment[]>()
+  const annotations = new Map<number, LyricStudyAnnotation>()
   for (const selectedLines of batches) {
     signal.throwIfAborted()
     const { provider, endpoint, model, apiKey } = connection
@@ -210,7 +234,7 @@ export async function analyzeLyrics(
     }
     const result = parseLyricStudyResponse(response.bodyText, selectedLines)
     incomplete ||= result.incomplete
-    for (const [id, segments] of result.annotations) annotations.set(id, segments)
+    for (const [id, annotation] of result.annotations) annotations.set(id, annotation)
   }
   return { annotations, incomplete }
 }

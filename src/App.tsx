@@ -121,10 +121,12 @@ import {
 import {
   defaultLyricStudySettings,
   getLyricStudyEndpoint,
+  groupLyricWords,
   lyricStudyProviders,
   normalizeLyricStudySettings,
 } from './lib/lyricStudy'
 import { useLyricStudy } from './lib/useLyricStudy'
+import { useWordRepeat } from './lib/useWordRepeat'
 import { CloseChoiceDialog } from './components/CloseChoiceDialog'
 import { mergeImportedPlaylists } from './lib/playlistImport'
 import { mergePlaylists, mergeTracksIntoPlaylist, renamePlaylist } from './lib/playlists'
@@ -5423,6 +5425,12 @@ function PlayerPage(props: PlayerPageProps) {
   }, [studyEnabled, props.open, props.lyricsFocused, props.lyricLines, selectedLyrics])
   const study = useLyricStudy(studyLines, props.lyricStudySettings, props.proxy)
   const annotations = study.result?.annotations
+  const wordRepeat = useWordRepeat()
+  const hasJapanese = useMemo(() => !!annotations && Array.from(annotations.values()).some((annotation) => annotation.language === 'ja'), [annotations])
+  const studyControlsVisible = !!studyLines?.length && (!study.result || study.result.incomplete || !annotations?.size)
+  useEffect(() => {
+    wordRepeat.stop()
+  }, [props.isPlaying, props.open, props.lyricLines, selectedLyrics, annotations, wordRepeat.stop])
   const [viewport, setViewport] = useState(() => ({
     width: document.documentElement.clientWidth,
     height: document.documentElement.clientHeight,
@@ -5709,25 +5717,30 @@ function PlayerPage(props: PlayerPageProps) {
               </div>
             </div>
           )}
-          {!!studyLines?.length && (!study.result || study.result.incomplete || !annotations?.size) && (
+          {(studyControlsVisible || (!props.isPlaying && hasJapanese)) && (
             <div className="lyrics-study-controls">
-              {study.configured && (!study.result || study.result.incomplete) && (
-                <button
-                  type="button"
-                  disabled={study.loading}
-                  onClick={study.analyze}
-                >
-                  {study.loading ? '正在注音…' : study.error || study.result?.incomplete ? '重试注音' : 'AI 注音'}
-                </button>
+              {studyControlsVisible && (
+                <>
+                  {study.configured && (!study.result || study.result.incomplete) && (
+                    <button
+                      type="button"
+                      disabled={study.loading}
+                      onClick={study.analyze}
+                    >
+                      {study.loading ? '正在注音…' : study.error || study.result?.incomplete ? '重试注音' : 'AI 注音'}
+                    </button>
+                  )}
+                  <span role="status">
+                    {!study.configured ? '在「设置 → 歌词循环」配置 AI 注音。'
+                      : study.error ?? (study.result?.incomplete ? '部分歌词未能注音。'
+                      : study.result && !annotations?.size ? '选区没有可注音的英语或日语歌词。' : '')}
+                  </span>
+                </>
               )}
-              <span role="status">
-                {!study.configured ? '在「设置 → 歌词循环」配置 AI 注音。'
-                  : study.error ?? (study.result?.incomplete ? '部分歌词未能注音。'
-                  : study.result && !annotations?.size ? '选区没有可注音的英语或日语歌词。' : '')}
-              </span>
+              {!props.isPlaying && hasJapanese && <span>{!wordRepeat.supported || (wordRepeat.voicesLoaded && !wordRepeat.hasJapaneseVoice) ? '系统没有日语语音，无法朗读。' : '点击单词反复朗读'}</span>}
             </div>
           )}
-          <div className="lyrics-scroll" ref={lyricsScrollRef}>
+          <div className={`lyrics-scroll${props.isPlaying ? '' : ' lyrics-paused'}`} ref={lyricsScrollRef}>
             {props.lyricsLoading ? (
               <div className="lyrics-empty">
                 <LoaderCircle className="spin" size={25} />
@@ -5737,7 +5750,7 @@ function PlayerPage(props: PlayerPageProps) {
               props.lyricLines.map((line, index) => {
                 const selected = selectedLyrics?.has(index)
                 if (props.lyricsFocused && !selected) return null
-                const segments = annotations?.get(index)
+                const annotation = annotations?.get(index)
                 return <button
                   key={`${line.time}-${index}`}
                   data-lyric-index={index}
@@ -5759,11 +5772,41 @@ function PlayerPage(props: PlayerPageProps) {
                     props.onSelectLyric(index, event.ctrlKey)
                   }}
                 >
-                  <span className={segments ? 'lyric-annotated' : undefined}>
-                    {segments?.map((segment, segmentIndex) => segment.reading ? (
-                      <ruby key={segmentIndex}>{segment.text}<rt>{segment.reading}</rt></ruby>
-                    ) : segment.text) ?? line.text}
-                  </span>
+                  {annotation?.language === 'ja' ? (
+                    <span className="lyric-annotated lyric-japanese">
+                      {groupLyricWords(annotation.segments).map((word, wordIndex) => {
+                        const wordKey = `${index}-${wordIndex}`
+                        const speaking = wordRepeat.speakingKey === wordKey
+                        const interactive = !props.isPlaying && !!word.text.trim()
+                        return (
+                          <span
+                            key={wordIndex}
+                            className={`lyric-word${speaking ? ' speaking' : ''}`}
+                            onPointerDown={interactive ? (event) => {
+                              if (event.button === 0 && !event.ctrlKey && !event.metaKey) event.stopPropagation()
+                            } : undefined}
+                            onClick={interactive ? (event) => {
+                              if (event.ctrlKey || event.metaKey) return
+                              event.stopPropagation()
+                              wordRepeat.toggle(wordKey, word.text)
+                            } : undefined}
+                          >
+                            {word.segments.map((segment, segmentIndex) => segment.reading ? (
+                              <ruby key={segmentIndex}>{segment.text}<rt>{segment.reading}</rt></ruby>
+                            ) : segment.text.trim() ? segment.text : null)}
+                          </span>
+                        )
+                      })}
+                    </span>
+                  ) : annotation ? (
+                    <span className="lyric-annotated">
+                      {annotation.segments.map((segment, segmentIndex) => segment.reading ? (
+                        <ruby key={segmentIndex}>{segment.text}<rt>{segment.reading}</rt></ruby>
+                      ) : segment.text)}
+                    </span>
+                  ) : (
+                    <span>{line.text}</span>
+                  )}
                   {line.translation && <small>{line.translation}</small>}
                 </button>
               })
