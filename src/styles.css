@@ -832,6 +832,7 @@ button:disabled {
 .search-box {
   position: relative;
   display: flex;
+  min-width: 0;
   align-items: center;
   max-width: 680px;
   height: 58px;
@@ -985,6 +986,18 @@ button:disabled {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
+@media (max-width: 1050px) {
+  .search-hero,
+  .search-hero.expanded {
+    padding-inline: 30px;
+  }
+
+  .search-mode-tabs button,
+  .provider-tabs button {
+    padding-inline: 9px;
+  }
+}
+
 .results-section,
 .page-section {
   padding: 31px 38px 44px;
@@ -1117,6 +1130,165 @@ button:disabled {
   margin-top: 8px;
   color: var(--subtle);
   font-size: 9px;
+}
+
+.artist-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+}
+
+.artist-avatar {
+  display: grid;
+  width: 48px;
+  aspect-ratio: 1;
+  flex-shrink: 0;
+  place-items: center;
+  overflow: hidden;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel-strong);
+}
+
+.artist-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.artist-card-info {
+  min-width: 0;
+}
+
+.artist-card-info strong,
+.artist-card-info span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artist-card-info strong {
+  font-size: 13px;
+}
+
+.artist-card-info span,
+.artist-profile-header p,
+.artist-message {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.artist-card-info span {
+  margin-top: 4px;
+}
+
+.artist-page-heading,
+.artist-album-heading {
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.artist-profile {
+  display: grid;
+  grid-template-columns: minmax(190px, 32%) minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  margin-bottom: 26px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 10% 20%, var(--accent-soft), transparent 36%),
+    var(--panel-soft);
+}
+
+.artist-profile-header {
+  display: flex;
+  align-self: center;
+  align-items: center;
+  gap: 16px;
+}
+
+.artist-profile[data-bio-expanded='true'] .artist-profile-header {
+  align-self: start;
+}
+
+.artist-profile-header .artist-avatar {
+  width: clamp(84px, 44%, 112px);
+}
+
+.artist-profile-header > :last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.artist-profile-header h2 {
+  margin: 5px 0;
+  font-size: 24px;
+}
+
+.artist-profile-header p,
+.artist-album-heading h3,
+.artist-bio h3 {
+  margin: 0;
+}
+
+.artist-album-heading h3 {
+  font-size: 17px;
+}
+
+.artist-bio {
+  min-width: 0;
+  padding-left: 20px;
+  border-left: 1px solid var(--border);
+}
+
+.artist-bio h3 {
+  font-size: 13px;
+}
+
+.artist-bio p {
+  max-width: 78ch;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.artist-bio-toggle {
+  margin-top: 8px;
+  padding: 3px 0;
+  color: var(--accent);
+  font-size: 12px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.artist-bio-toggle:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  .artist-profile {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .artist-profile-header .artist-avatar {
+    width: 84px;
+  }
+
+  .artist-bio {
+    padding: 16px 0 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
 }
 
 .album-detail-summary {
@@ -1586,6 +1758,26 @@ button.track-album:disabled {
 .inline-error span {
   color: var(--muted);
   font-size: 11px;
+}
+
+.artist-album-footer {
+  min-height: 1px;
+  overflow-anchor: none;
+}
+
+.album-grid + .artist-album-footer .loading-state {
+  min-height: 72px;
+  flex-direction: row;
+  gap: 8px;
+}
+
+.album-grid + .artist-album-footer .inline-error {
+  margin-top: 16px;
+}
+
+.album-grid + .artist-album-footer .artist-message {
+  margin: 20px 0 0;
+  text-align: center;
 }
 
 .page-section {
@@ -3974,10 +4166,6 @@ input[type='range'].timeline-slider {
   .nav-item {
     justify-content: center;
     padding: 0;
-  }
-
-  .search-hero {
-    padding-inline: 30px;
   }
 
   .results-section,

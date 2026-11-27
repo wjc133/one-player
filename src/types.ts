@@ -82,6 +82,27 @@ export interface AlbumDetail {
   list: MusicTrack[]
 }
 
+export interface ArtistSummary {
+  id: string
+  name: string
+  source: OnlineSourceKey
+  img: string | null
+  alias?: string
+  region?: string
+  albumCount?: number
+  bio?: string
+}
+
+export interface ArtistSearchResult {
+  list: ArtistSummary[]
+  allPage: number
+}
+
+export interface ArtistAlbumPage {
+  list: AlbumSummary[]
+  hasMore: boolean
+}
+
 export interface SavedAlbum {
   album: AlbumSummary
   tracks: MusicTrack[]

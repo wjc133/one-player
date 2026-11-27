@@ -5,6 +5,9 @@ import type {
   AlbumSearchResult,
   AlbumSummary,
   AppSettings,
+  ArtistAlbumPage,
+  ArtistSearchResult,
+  ArtistSummary,
   LyricPayload,
   MusicTrack,
   OnlineSourceKey,
@@ -269,7 +272,7 @@ const requestTencentSearch = async (
   keyword: string,
   page: number,
   limit: number,
-  searchType: 0 | 2,
+  searchType: 0 | 1 | 2,
   settings: AppSettings,
 ) => {
   const payload = {
@@ -312,6 +315,7 @@ const requestTencentSearch = async (
       data?: {
         body?: {
           album?: { list?: Array<Record<string, unknown>> }
+          singer?: { list?: Array<Record<string, unknown>> }
           song?: { list?: Array<Record<string, unknown>> }
         }
         meta?: { sum?: number }
@@ -738,20 +742,18 @@ const parseKuwoTypes = (item: Record<string, unknown>) => {
   return types.reverse()
 }
 
-const searchKuwoAlbums = async (
-  keyword: string,
-  page: number,
+const requestKuwoAlbums = async (
+  query: string,
   settings: AppSettings,
 ): Promise<AlbumSearchResult> => {
   const limit = albumLimits.kw
   const data = await requestJson<{
     TOTAL?: string
+    total?: string
     SHOW?: string
     albumlist?: Array<Record<string, unknown>>
   }>(
-    `http://search.kuwo.cn/r.s?client=kt&all=${encodeURIComponent(
-      keyword,
-    )}&pn=${page - 1}&rn=${limit}&ft=album&encoding=utf8&rformat=json`,
+    `http://search.kuwo.cn/r.s?client=kt&${query}&rn=${limit}&encoding=utf8&rformat=json`,
     settings,
   )
   const list = (data.albumlist ?? []).flatMap((item) => {
@@ -764,11 +766,11 @@ const searchKuwoAlbums = async (
         singer: decodeHtml(String(item.artist ?? item.aartist ?? '')),
         img: normalizeKuwoCover(item.hts_img ?? item.img ?? item.pic),
         publishTime: String(item.pub ?? item.releaseDate ?? '') || undefined,
-        songCount: Number(item.songnum) || undefined,
+        songCount: Number(item.songnum ?? item.musiccnt) || undefined,
       }),
     ]
   })
-  const total = Number(data.TOTAL ?? data.SHOW ?? list.length)
+  const total = Number(data.TOTAL ?? data.total ?? data.SHOW ?? list.length)
   return {
     list,
     allPage: Math.max(1, Math.ceil(total / limit)),
@@ -778,24 +780,20 @@ const searchKuwoAlbums = async (
   }
 }
 
-const searchKugouAlbums = async (
-  keyword: string,
-  page: number,
+const requestKugouAlbums = async (
+  url: string,
   settings: AppSettings,
 ): Promise<AlbumSearchResult> => {
   const limit = albumLimits.kg
   const data = await requestJson<{
     status?: number
+    error?: string
     data?: {
       total?: number
       info?: Array<Record<string, unknown>>
     }
-  }>(
-    `http://mobilecdn.kugou.com/api/v3/search/album?format=json&keyword=${encodeURIComponent(
-      keyword,
-    )}&page=${page}&pagesize=${limit}`,
-    settings,
-  )
+  }>(`${url}&pagesize=${limit}`, settings)
+  if (data.status === 0) throw new Error(data.error || '酷狗专辑列表加载失败')
   const list = (data.data?.info ?? []).flatMap((item) => {
     const id = String(item.albumid ?? '')
     if (!id) return []
@@ -873,6 +871,24 @@ const searchTencentAlbums = async (
   }
 }
 
+const toNeteaseAlbum = (item: Record<string, unknown>): AlbumSummary[] => {
+  const id = String(item.id ?? '')
+  if (!id) return []
+  const artist = item.artist as Record<string, unknown> | undefined
+  return [
+    createAlbum('wy', {
+      id,
+      name: decodeHtml(String(item.name ?? '')),
+      singer: decodeHtml(String(artist?.name ?? '')),
+      img: String(item.picUrl ?? item.blurPicUrl ?? '') || null,
+      publishTime: Number(item.publishTime)
+        ? new Date(Number(item.publishTime)).toLocaleDateString()
+        : undefined,
+      songCount: Number(item.size) || undefined,
+    }),
+  ]
+}
+
 const searchNeteaseAlbums = async (
   keyword: string,
   page: number,
@@ -899,23 +915,7 @@ const searchNeteaseAlbums = async (
     },
   )
   if (data.code && data.code !== 200) throw new Error('网易云专辑搜索失败')
-  const list = (data.result?.albums ?? []).flatMap((item) => {
-    const id = String(item.id ?? '')
-    if (!id) return []
-    const artist = item.artist as Record<string, unknown> | undefined
-    return [
-      createAlbum('wy', {
-        id,
-        name: decodeHtml(String(item.name ?? '')),
-        singer: decodeHtml(String(artist?.name ?? '')),
-        img: String(item.picUrl ?? item.blurPicUrl ?? '') || null,
-        publishTime: Number(item.publishTime)
-          ? new Date(Number(item.publishTime)).toLocaleDateString()
-          : undefined,
-        songCount: Number(item.size) || undefined,
-      }),
-    ]
-  })
+  const list = (data.result?.albums ?? []).flatMap(toNeteaseAlbum)
   const total = Number(data.result?.albumCount ?? list.length)
   return {
     list,
@@ -1234,18 +1234,26 @@ const getMiguAlbumDetail = async (
   album: AlbumSummary,
   settings: AppSettings,
 ): Promise<AlbumDetail> => {
-  const data = await requestJson<{
+  const requestSongs = (id: string) => requestJson<{
     code?: string
     info?: string
     data?: {
       songList?: Array<Record<string, unknown>>
     }
   }>(
-    `http://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/queryAlbumSong?albumId=${encodeURIComponent(
-      album.id,
-    )}&pageNo=1`,
+    `http://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/queryAlbumSong?albumId=${encodeURIComponent(id)}&pageNo=1`,
     settings,
   )
+  let data = await requestSongs(album.id)
+  let materialId: string | undefined
+  if (data.code === '000000' && !data.data?.songList) {
+    const digital = await requestJson<{ code?: string; data?: { materialId?: string } }>(
+      `https://app.u.nf.migu.cn/pc/resource/dalbum/v2.0?dAlbumId=${encodeURIComponent(album.id)}`,
+      settings,
+    )
+    materialId = digital.code === '000000' ? digital.data?.materialId : undefined
+    if (materialId && materialId !== album.id) data = await requestSongs(materialId)
+  }
   if (data.code !== '000000') throw new Error(data.info || '咪咕专辑加载失败')
   const list = (data.data?.songList ?? []).flatMap((item) => {
     const songmid = String(item.songId ?? '')
@@ -1277,7 +1285,7 @@ const getMiguAlbumDetail = async (
         interval:
           String(item.length ?? '') || formatTime(Number(item.duration)),
         albumName: decodeHtml(String(item.album ?? album.name)),
-        albumId: String(item.albumId ?? album.id),
+        albumId: materialId ? album.id : String(item.albumId ?? album.id),
         copyrightId,
         img: String(images?.[0]?.img ?? album.img ?? '') || null,
         lrcUrl: String(item.lrcUrl ?? '') || undefined,
@@ -1302,9 +1310,12 @@ export const searchAlbums = (
 ) => {
   switch (source) {
     case 'kw':
-      return searchKuwoAlbums(keyword, page, settings)
+      return requestKuwoAlbums(`ft=album&all=${encodeURIComponent(keyword)}&pn=${page - 1}`, settings)
     case 'kg':
-      return searchKugouAlbums(keyword, page, settings)
+      return requestKugouAlbums(
+        `http://mobilecdn.kugou.com/api/v3/search/album?format=json&keyword=${encodeURIComponent(keyword)}&page=${page}`,
+        settings,
+      )
     case 'tx':
       return searchTencentAlbums(keyword, page, settings)
     case 'wy':
@@ -1349,6 +1360,378 @@ export const searchMusic = (
       return searchNetease(keyword, page, settings)
     case 'mg':
       return searchMigu(keyword, page, settings)
+  }
+}
+
+const artistLimit = 20
+const neteaseArtistHeaders = {
+  Referer: 'https://music.163.com/',
+  'User-Agent': 'Mozilla/5.0',
+}
+
+const artistText = (value: unknown) =>
+  decodeHtml(String(value ?? '').replace(/<br\s*\/?>/gi, '\n')).trim()
+
+const artistCount = (value: unknown) => {
+  if (value == null || value === '') return undefined
+  const count = Number(value)
+  return Number.isSafeInteger(count) && count >= 0 ? count : undefined
+}
+
+const artistImage = (value: unknown, base?: string) => {
+  const path = String(value ?? '').trim()
+  if (!path) return null
+  try {
+    const url = new URL(path.startsWith('//') ? `https:${path}` : path, base)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    url.protocol = 'https:'
+    return url.href
+  } catch {
+    return null
+  }
+}
+
+const kuwoArtistImageBase = 'https://img1.kuwo.cn/star/starheads/'
+
+const artistSearchResult = (
+  list: ArtistSummary[],
+  total: unknown = list.length,
+): ArtistSearchResult => ({
+  list: list.filter((artist) => artist.id && artist.name),
+  allPage: Math.max(1, Math.ceil((artistCount(total) ?? list.length) / artistLimit)),
+})
+
+const searchKuwoArtists = async (keyword: string, page: number, settings: AppSettings) => {
+  const data = await requestJson<{
+    TOTAL?: string
+    BASEPICPATH?: string
+    abslist?: Array<Record<string, unknown>>
+  }>(
+    `http://search.kuwo.cn/r.s?client=kt&all=${encodeURIComponent(keyword)}&pn=${page - 1}&rn=${artistLimit}&ft=artist&encoding=utf8&rformat=json`,
+    settings,
+  )
+  const base = artistImage(data.BASEPICPATH) ?? kuwoArtistImageBase
+  const list = (data.abslist ?? []).map((item): ArtistSummary => ({
+    id: String(item.ARTISTID ?? ''),
+    name: artistText(item.ARTIST),
+    source: 'kw',
+    img: artistImage(item.hts_PICPATH, base) ?? artistImage(item.PICPATH, base),
+    alias: artistText(item.AARTIST),
+    region: artistText(item.COUNTRY),
+    albumCount: artistCount(item.ALBUMNUM),
+    bio: artistText(item.desc),
+  }))
+  return artistSearchResult(list, data.TOTAL)
+}
+
+const searchKugouArtists = async (keyword: string, page: number, settings: AppSettings) => {
+  const data = await requestJson<{
+    status?: number
+    error?: string
+    data?: {
+      total?: number
+      lists?: Array<{ AuthorId?: number; AuthorName?: string; Avatar?: string; AlbumCount?: number }>
+    }
+  }>(
+    `https://songsearch.kugou.com/author_search?keyword=${encodeURIComponent(keyword)}&page=${page}&pagesize=${artistLimit}`,
+    settings,
+  )
+  if (data.status !== 1) throw new Error(data.error || '酷狗歌手搜索失败')
+  const list = (data.data?.lists ?? []).map((item): ArtistSummary => ({
+    id: String(item.AuthorId ?? ''),
+    name: artistText(item.AuthorName),
+    img: artistImage(normalizeKugouCover(item.Avatar)),
+    source: 'kg',
+    albumCount: artistCount(item.AlbumCount),
+  }))
+  return artistSearchResult(list, data.data?.total)
+}
+
+const searchTencentArtists = async (keyword: string, page: number, settings: AppSettings) => {
+  const data = await requestTencentSearch(keyword, page, artistLimit, 1, settings)
+  const list = (data.body?.singer?.list ?? []).map((item): ArtistSummary => ({
+    id: String(item.singerMID ?? ''),
+    name: artistText(item.singerName),
+    img: artistImage(item.singerPic) ?? (item.singerMID
+      ? `https://y.gtimg.cn/music/photo_new/T001R300x300M000${encodeURIComponent(String(item.singerMID))}.jpg`
+      : null),
+    source: 'tx',
+    albumCount: artistCount(item.albumNum),
+  }))
+  return artistSearchResult(list, data.meta?.sum)
+}
+
+const searchNeteaseArtists = async (keyword: string, page: number, settings: AppSettings) => {
+  const data = await requestJson<{
+    code?: number
+    result?: {
+      artistCount?: number
+      artists?: Array<{ id: number; name: string; picUrl?: string; img1v1Url?: string; alias?: string[]; albumSize?: number }>
+    }
+  }>(
+    `https://music.163.com/api/search/get/web?csrf_token=&s=${encodeURIComponent(keyword)}&type=100&offset=${(page - 1) * artistLimit}&total=true&limit=${artistLimit}`,
+    settings,
+    { headers: neteaseArtistHeaders },
+  )
+  if (data.code !== 200) throw new Error('网易云歌手搜索失败')
+  const list = (data.result?.artists ?? []).map((item): ArtistSummary => ({
+    id: String(item.id ?? ''),
+    name: artistText(item.name),
+    img: artistImage(item.picUrl) ?? artistImage(item.img1v1Url),
+    source: 'wy',
+    alias: item.alias?.map(artistText).filter(Boolean).join('、'),
+    albumCount: artistCount(item.albumSize),
+  }))
+  return artistSearchResult(list, data.result?.artistCount)
+}
+
+const searchMiguArtists = async (keyword: string, page: number, settings: AppSettings) => {
+  const searchSwitch = encodeURIComponent(JSON.stringify({
+    song: 0, album: 0, singer: 1, tagSong: 0, mvSong: 0, bestShow: 0, songlist: 0, lyricSong: 0,
+  }))
+  const data = await requestJson<{
+    code?: string
+    info?: string
+    singerResultData?: {
+      totalCount?: string
+      result?: Array<{ id: string; name: string; albumCount?: number; singerPicUrl?: Array<{ img: string }> }>
+    }
+  }>(
+    `https://jadeite.migu.cn/music_search/v3/search/searchAll?isCorrect=0&isCopyright=1&searchSwitch=${searchSwitch}&pageSize=${artistLimit}&text=${encodeURIComponent(keyword)}&pageNo=${page}&sort=0&sid=USS`,
+    settings,
+    { headers: await createMiguHeaders(keyword) },
+  )
+  if (data.code !== '000000') throw new Error(data.info || '咪咕歌手搜索失败')
+  const list = (data.singerResultData?.result ?? []).map((item): ArtistSummary => ({
+    id: String(item.id ?? ''),
+    name: artistText(item.name),
+    img: item.singerPicUrl?.map(({ img }) => artistImage(img, 'https://d.musicapp.migu.cn/')).find(Boolean) ?? null,
+    source: 'mg',
+    albumCount: artistCount(item.albumCount),
+  }))
+  return artistSearchResult(list, data.singerResultData?.totalCount)
+}
+
+export const searchArtists = (
+  source: OnlineSourceKey,
+  keyword: string,
+  page: number,
+  settings: AppSettings,
+) => {
+  switch (source) {
+    case 'kw': return searchKuwoArtists(keyword, page, settings)
+    case 'kg': return searchKugouArtists(keyword, page, settings)
+    case 'tx': return searchTencentArtists(keyword, page, settings)
+    case 'wy': return searchNeteaseArtists(keyword, page, settings)
+    case 'mg': return searchMiguArtists(keyword, page, settings)
+  }
+}
+
+interface MiguArtistSection {
+  view?: string
+  contents?: MiguArtistSection[]
+  resId?: string
+  txt?: string
+  txt2?: string
+  txt3?: string
+  img?: string
+}
+
+const requestMiguArtistPage = async (path: 'index/v1.0' | 'info/v1.1' | 'album/v1.0', query: string, settings: AppSettings) => {
+  const data = await requestJson<{
+    code?: string
+    info?: string
+    data?: { header?: { nextPageUrl?: string }; contents?: MiguArtistSection[] }
+  }>(`https://app.u.nf.migu.cn/pc/bmw/singer/${path}?${query}`, settings)
+  if (data.code !== '000000') throw new Error(data.info || '咪咕歌手信息加载失败')
+  return data.data
+}
+
+export const getArtistProfile = async (artist: ArtistSummary, settings: AppSettings): Promise<ArtistSummary> => {
+  const id = encodeURIComponent(artist.id)
+  switch (artist.source) {
+    case 'kw': {
+      if (artist.img) return artist
+      const data = await requestJson<{ hts_pic?: string; pic?: string }>(
+        `http://search.kuwo.cn/r.s?stype=artistinfo&artistid=${id}&encoding=utf8&rformat=json`,
+        settings,
+      )
+      return { ...artist, img: artistImage(data.hts_pic) ?? artistImage(data.pic, kuwoArtistImageBase) }
+    }
+    case 'kg': {
+      const response = await requestJson<{
+        status?: number
+        error?: string
+        data?: { imgurl?: string; alias?: string; profile?: string; intro?: string; albumcount?: number }
+      }>(`http://mobilecdn.kugou.com/api/v3/singer/info?singerid=${id}`, settings)
+      if (response.status !== 1) throw new Error(response.error || '酷狗歌手简介加载失败')
+      return {
+        ...artist,
+        img: artist.img ?? artistImage(normalizeKugouCover(response.data?.imgurl)),
+        alias: artistText(response.data?.alias),
+        bio: artistText(response.data?.profile || response.data?.intro),
+        albumCount: artistCount(response.data?.albumcount) ?? artist.albumCount,
+      }
+    }
+    case 'tx': {
+      const response = await requestText(
+        `https://c.y.qq.com/splcloud/fcgi-bin/fcg_get_singer_desc.fcg?singermid=${id}&format=xml&utf8=1&outCharset=utf-8`,
+        settings,
+        { headers: { Referer: 'https://y.qq.com/', 'User-Agent': 'Mozilla/5.0' } },
+      )
+      const xml = new DOMParser().parseFromString(response, 'text/xml')
+      if (xml.querySelector('result > code')?.textContent !== '0') throw new Error('QQ 歌手简介加载失败')
+      return { ...artist, bio: artistText(xml.querySelector('data desc')?.textContent) }
+    }
+    case 'wy': {
+      const data = await requestJson<{
+        code?: number
+        briefDesc?: string
+        introduction?: Array<{ ti?: string; txt?: string }>
+      }>(
+        `https://music.163.com/api/artist/introduction?id=${id}`,
+        settings,
+        { headers: neteaseArtistHeaders },
+      )
+      if (data.code !== 200) throw new Error('网易云歌手简介加载失败')
+      const introduction = data.introduction?.find((item) => item.ti?.includes('简介'))
+      return { ...artist, bio: artistText(data.briefDesc || introduction?.txt) }
+    }
+    case 'mg': {
+      const query = `singerId=${id}`
+      const [data, img] = await Promise.all([
+        requestMiguArtistPage('index/v1.0', query, settings),
+        artist.img ?? requestMiguArtistPage('info/v1.1', query, settings).then((info) => {
+          const header = info?.contents?.find((section) => section.view === 'ZJ-SingerDetail-Scroll')
+          return artistImage(header?.contents?.[0]?.img, 'https://d.musicapp.migu.cn/')
+        }).catch(() => null),
+      ])
+      const introduction = data?.contents?.find((section) => section.view === 'ZJ-Singer-Intro-Scroll')
+      return { ...artist, img, bio: artistText(introduction?.contents?.[0]?.txt2) }
+    }
+  }
+}
+
+const albumReleaseDate = (album: AlbumSummary) => {
+  const date = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:$|[ T])/.exec(album.publishTime?.trim() ?? '')
+  if (!date) return Number.NEGATIVE_INFINITY
+  const [, year, month, day] = date.map(Number)
+  return month >= 1 && month <= 12 && day >= 1 && day <= 31
+    ? Date.UTC(year, month - 1, day)
+    : Number.NEGATIVE_INFINITY
+}
+
+const sortArtistAlbums = (albums: AlbumSummary[]) =>
+  albums.sort((first, second) => albumReleaseDate(second) - albumReleaseDate(first) || 0)
+
+const getMiguArtistAlbumCatalog = async (artist: ArtistSummary, settings: AppSettings) => {
+  const id = encodeURIComponent(artist.id)
+  const albums = new Map<string, AlbumSummary>()
+  let page = 1
+  while (true) {
+    const data = await requestMiguArtistPage('album/v1.0', `singerId=${id}&pageNo=${page}`, settings)
+    for (const item of data?.contents ?? []) {
+      if (!item.resId || !item.txt || albums.has(item.resId)) continue
+      albums.set(item.resId, createAlbum('mg', {
+        id: item.resId,
+        name: artistText(item.txt),
+        singer: artistText(item.txt2).replaceAll('|', '、') || artist.name,
+        img: item.img ?? null,
+        publishTime: item.txt3,
+      }))
+    }
+    if (!data?.header?.nextPageUrl) return sortArtistAlbums([...albums.values()])
+    page += 1
+  }
+}
+
+const getArtistAlbums = async (
+  artist: ArtistSummary,
+  source: Exclude<OnlineSourceKey, 'mg'>,
+  page: number,
+  settings: AppSettings,
+): Promise<ArtistAlbumPage> => {
+  const id = encodeURIComponent(artist.id)
+  const limit = albumLimits[source]
+  const offset = (page - 1) * limit
+  switch (source) {
+    case 'kw': {
+      const result = await requestKuwoAlbums(`stype=albumlist&plat=pc&pcjson=1&artistid=${id}&pn=${page - 1}`, settings)
+      return { list: sortArtistAlbums(result.list), hasMore: page < result.allPage }
+    }
+    case 'kg': {
+      const result = await requestKugouAlbums(
+        `http://mobilecdn.kugou.com/api/v3/singer/album?singerid=${id}&page=${page}`,
+        settings,
+      )
+      return { list: sortArtistAlbums(result.list), hasMore: page < result.allPage }
+    }
+    case 'tx': {
+      const request = JSON.stringify({
+        comm: { ct: 24, cv: 0 },
+        albums: {
+          module: 'music.musichallAlbum.AlbumListServer',
+          method: 'GetAlbumList',
+          param: { singerMid: artist.id, order: 0, number: limit, begin: offset },
+        },
+      })
+      const data = await requestJson<{
+        code?: number
+        albums?: {
+          code?: number
+          data?: { total?: number; albumList?: Array<Record<string, unknown>> }
+        }
+      }>(`https://u.y.qq.com/cgi-bin/musicu.fcg?data=${encodeURIComponent(request)}`, settings)
+      if (data.code !== 0 || data.albums?.code !== 0) throw new Error('QQ 歌手专辑加载失败')
+      const albums = data.albums.data?.albumList ?? []
+      const list = albums.slice(0, limit).flatMap((item) => {
+        const mid = String(item.albumMid ?? '')
+        if (!mid || !item.albumName) return []
+        return [createAlbum('tx', {
+          id: mid,
+          albumMid: mid,
+          name: artistText(item.albumName),
+          singer: artistText(item.singerName) || artist.name,
+          img: `https://y.gtimg.cn/music/photo_new/T002R500x500M000${mid}.jpg`,
+          publishTime: String(item.publishDate ?? '') || undefined,
+          songCount: artistCount(item.totalNum) || undefined,
+        })]
+      })
+      return { list: sortArtistAlbums(list), hasMore: offset + limit < (data.albums.data?.total ?? offset + albums.length) }
+    }
+    case 'wy': {
+      const data = await requestJson<{ code?: number; hotAlbums?: Array<Record<string, unknown>>; more?: boolean }>(
+        `https://music.163.com/api/artist/albums/${id}?limit=${limit}&offset=${offset}&total=true`,
+        settings,
+        { headers: neteaseArtistHeaders },
+      )
+      if (data.code !== 200) throw new Error('网易云歌手专辑加载失败')
+      const albums = (data.hotAlbums ?? []).sort((first, second) => {
+        const firstDate = Number(first.publishTime) || Number.NEGATIVE_INFINITY
+        const secondDate = Number(second.publishTime) || Number.NEGATIVE_INFINITY
+        return secondDate - firstDate || 0
+      })
+      return { list: albums.flatMap(toNeteaseAlbum), hasMore: data.more === true }
+    }
+  }
+}
+
+export const createArtistAlbumLoader = (artist: ArtistSummary, settings: AppSettings) => {
+  const { source } = artist
+  if (source !== 'mg') return (page: number) => getArtistAlbums(artist, source, page, settings)
+
+  const pageSize = 10
+  let catalog: Promise<AlbumSummary[]> | undefined
+  return async (page: number): Promise<ArtistAlbumPage> => {
+    catalog ??= getMiguArtistAlbumCatalog(artist, settings).catch((error: unknown) => {
+      catalog = undefined
+      throw error
+    })
+    const albums = await catalog
+    return {
+      list: albums.slice((page - 1) * pageSize, page * pageSize),
+      hasMore: page * pageSize < albums.length,
+    }
   }
 }
 

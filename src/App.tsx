@@ -64,6 +64,7 @@ import type {
   AlbumDetail,
   AlbumSummary,
   AppSettings,
+  ArtistSummary,
   CustomSourceInfo,
   DownloadedAudio,
   DownloadProgress,
@@ -93,8 +94,11 @@ import {
   getBuiltinLyrics,
   providerNames,
   searchAlbums,
+  searchArtists,
   searchMusic,
 } from './lib/providers'
+import { AlbumGrid } from './components/AlbumGrid'
+import { ArtistPage, ArtistResults } from './components/ArtistSearch'
 import { SourceRuntime } from './lib/sourceRuntime'
 import { updateSourceFromUrl } from './lib/sourceUpdater'
 import { WalkmanPage } from './components/WalkmanPage'
@@ -174,7 +178,7 @@ import {
 } from './lib/tauri'
 
 type View = 'search' | 'library' | 'downloads' | 'walkman' | 'settings'
-type SearchMode = 'track' | 'album'
+type SearchMode = 'track' | 'album' | 'artist'
 type SettingsTab = 'general' | 'lyrics' | 'sources' | 'updates'
 
 const PLAYER_PAGE_TRANSITION_MS = 520
@@ -576,12 +580,17 @@ function App() {
   const [allPage, setAllPage] = useState(1)
   const [searchResults, setSearchResults] = useState<MusicTrack[]>([])
   const [albumResults, setAlbumResults] = useState<AlbumSummary[]>([])
+  const [artistResults, setArtistResults] = useState<ArtistSummary[]>([])
+  const [artist, setArtist] = useState<ArtistSummary | null>(null)
+  const [albumTarget, setAlbumTarget] = useState<AlbumSummary | null>(null)
   const [albumDetail, setAlbumDetail] = useState<AlbumDetail | null>(null)
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
   const searchRequestRef = useRef(0)
   const [searchHeroExpanded, setSearchHeroExpanded] = useState(true)
   const contentScrollRef = useRef<HTMLDivElement>(null)
+  const artistResultsScroll = useRef(0)
+  const artistPageScroll = useRef(0)
 
   const [playlists, setPlaylists] = useState<PlayList[]>(loadPlaylists)
   const playlistsRef = useRef(playlists)
@@ -1373,55 +1382,78 @@ function App() {
     event?.preventDefault()
     const keyword = targetQuery.trim()
     if (!keyword) return
-    const requestId = searchRequestRef.current + 1
-    searchRequestRef.current = requestId
+    const requestId = ++searchRequestRef.current
     const nextProvider = targets.provider ?? provider
     const nextSearchMode = targets.searchMode ?? searchMode
     setSearchHeroExpanded(false)
     setSearching(true)
     setSearchError('')
+    setSearchedQuery(keyword)
+    setPage(targetPage)
+    setArtist(null)
+    setAlbumTarget(null)
     setAlbumDetail(null)
-    requestAnimationFrame(() => {
-      contentScrollRef.current?.scrollTo({ top: 0 })
-    })
+    scrollSearchTo()
     try {
-      if (nextSearchMode === 'album') {
-        const result = await searchAlbums(
-          nextProvider,
-          keyword,
-          targetPage,
-          settingsRef.current,
-        )
+      if (nextSearchMode === 'artist') {
+        const result = await searchArtists(nextProvider, keyword, targetPage, settingsRef.current)
+        if (requestId !== searchRequestRef.current) return
+        setArtistResults(result.list)
+        setAllPage(result.allPage)
+      } else if (nextSearchMode === 'album') {
+        const result = await searchAlbums(nextProvider, keyword, targetPage, settingsRef.current)
         if (requestId !== searchRequestRef.current) return
         setAlbumResults(result.list)
-        setSearchResults([])
         setAllPage(result.allPage)
       } else {
-        const result = await searchMusic(
-          nextProvider,
-          keyword,
-          targetPage,
-          settingsRef.current,
-        )
+        const result = await searchMusic(nextProvider, keyword, targetPage, settingsRef.current)
         if (requestId !== searchRequestRef.current) return
         setSearchResults(result.list)
-        setAlbumResults([])
         setAllPage(result.allPage)
       }
-      setSearchedQuery(keyword)
-      setPage(targetPage)
     } catch (error) {
       if (requestId !== searchRequestRef.current) return
-      setSearchResults([])
-      setAlbumResults([])
+      setAllPage(1)
       setSearchError(error instanceof Error ? error.message : String(error))
     } finally {
       if (requestId === searchRequestRef.current) setSearching(false)
     }
   }
 
-  async function openAlbum(album: AlbumSummary) {
+  function scrollSearchTo(top = 0) {
+    requestAnimationFrame(() => {
+      contentScrollRef.current?.scrollTo({ top })
+    })
+  }
+
+  function openArtist(result: ArtistSummary) {
+    artistResultsScroll.current = contentScrollRef.current?.scrollTop ?? 0
+    setArtist(result)
+    scrollSearchTo()
+  }
+
+  function closeArtist() {
+    setArtist(null)
+    scrollSearchTo(artistResultsScroll.current)
+  }
+
+  function closeAlbum() {
+    searchRequestRef.current += 1
+    setAlbumTarget(null)
+    setAlbumDetail(null)
+    setSearchError('')
+    setSearching(false)
+    if (artist) scrollSearchTo(artistPageScroll.current)
+  }
+
+  async function openAlbum(album: AlbumSummary, fromArtist = false) {
+    if (fromArtist) {
+      artistPageScroll.current = contentScrollRef.current?.scrollTop ?? 0
+      scrollSearchTo()
+    }
     const requestId = ++searchRequestRef.current
+    setAlbumTarget(album)
+    setAlbumDetail(null)
     setSearching(true)
     setSearchError('')
     try {
@@ -1491,6 +1523,8 @@ function App() {
     setAllPage(1)
     setSearchResults([])
     setAlbumResults([savedAlbum.album])
+    setArtist(null)
+    setAlbumTarget(savedAlbum.album)
     setAlbumDetail(savedAlbum.tracks.length ? detail : null)
     setSearchError('')
     setSearching(!savedAlbum.tracks.length)
@@ -1507,6 +1541,12 @@ function App() {
       showToast('这首歌曲没有可用的在线专辑信息')
       return
     }
+    const trackAlbum = trackAlbumSummary(track)
+    if (artist && albumDetail && trackAlbum &&
+        albumCollectionKey(trackAlbum) === albumCollectionKey(albumDetail.album)) {
+      setView('search')
+      return
+    }
 
     const requestId = ++searchRequestRef.current
     setView('search')
@@ -1519,6 +1559,8 @@ function App() {
     setAllPage(1)
     setSearchResults([])
     setAlbumResults([])
+    setArtist(null)
+    setAlbumTarget(null)
     setAlbumDetail(null)
     setSearchError('')
     setSearching(true)
@@ -1527,7 +1569,7 @@ function App() {
     })
 
     try {
-      let album = trackAlbumSummary(track)
+      let album = trackAlbum
       if (!album) {
         const result = await searchAlbums(
           track.source,
@@ -1555,6 +1597,7 @@ function App() {
       }
       if (!album) throw new Error('没有找到该专辑')
 
+      setAlbumTarget(album)
       const detail = await getAlbumDetail(album, settingsRef.current)
       if (requestId !== searchRequestRef.current) return
       setAlbumDetail(detail)
@@ -1568,11 +1611,16 @@ function App() {
   }
 
   function resetSearchResultState() {
+    searchRequestRef.current += 1
+    setSearching(false)
     setSearchedQuery('')
     setPage(1)
     setAllPage(1)
     setSearchResults([])
     setAlbumResults([])
+    setArtistResults([])
+    setArtist(null)
+    setAlbumTarget(null)
     setAlbumDetail(null)
     setSearchError('')
     setSearchHeroExpanded(true)
@@ -2982,6 +3030,11 @@ function App() {
               searchError={searchError}
               results={searchResults}
               albums={albumResults}
+              artists={artistResults}
+              artist={artist}
+              settings={settings}
+              scrollRootRef={contentScrollRef}
+              albumTarget={albumTarget}
               albumDetail={albumDetail}
               favoriteTrackIds={favoriteTrackIds}
               favoriteAlbums={favoriteAlbums}
@@ -2997,15 +3050,14 @@ function App() {
               page={page}
               allPage={allPage}
               onSearch={handleSearch}
-              onOpenAlbum={(album) => void openAlbum(album)}
+              onOpenArtist={openArtist}
+              onCloseArtist={closeArtist}
+              onOpenAlbum={(album) => void openAlbum(album, artist !== null)}
               onOpenTrackAlbum={(track) => void openTrackAlbum(track)}
               onToggleAlbumFavorite={toggleFavoriteAlbum}
               onDownloadAlbum={requestAlbumDownload}
               canChooseDownloadDestination={walkmanDevices.length > 0}
-              onCloseAlbum={() => {
-                setAlbumDetail(null)
-                setSearchError('')
-              }}
+              onCloseAlbum={closeAlbum}
               onPlay={(track, list) => void playTrack(track, list)}
               onFavorite={setPlaylistPickerTrack}
               onDownload={requestTrackDownload}
@@ -3123,7 +3175,7 @@ function App() {
                     action="去搜索专辑"
                     onAction={() => {
                       setView('search')
-                      setSearchMode('album')
+                      changeSearchMode('album')
                     }}
                   />
                 )
@@ -3652,6 +3704,11 @@ interface SearchViewProps {
   searchError: string
   results: MusicTrack[]
   albums: AlbumSummary[]
+  artists: ArtistSummary[]
+  artist: ArtistSummary | null
+  settings: AppSettings
+  scrollRootRef: RefObject<HTMLDivElement | null>
+  albumTarget: AlbumSummary | null
   albumDetail: AlbumDetail | null
   favoriteTrackIds: ReadonlySet<string>
   favoriteAlbums: SavedAlbum[]
@@ -3665,6 +3722,8 @@ interface SearchViewProps {
     targetPage?: number,
     targetQuery?: string,
   ) => void
+  onOpenArtist: (artist: ArtistSummary) => void
+  onCloseArtist: () => void
   onOpenAlbum: (album: AlbumSummary) => void
   onOpenTrackAlbum: (track: MusicTrack) => void
   onToggleAlbumFavorite: (detail: AlbumDetail) => void
@@ -3679,6 +3738,9 @@ interface SearchViewProps {
 function SearchView(props: SearchViewProps) {
   const detailTracks = props.albumDetail?.list ?? []
   const isAlbumMode = props.searchMode === 'album'
+  const isArtistMode = props.searchMode === 'artist'
+  const shownAlbum = props.albumDetail?.album ?? props.albumTarget
+  const showArtistPage = props.artist !== null && shownAlbum === null
   const albumFavorited =
     props.albumDetail !== null &&
     props.favoriteAlbums.some(
@@ -3691,13 +3753,20 @@ function SearchView(props: SearchViewProps) {
   )
   const resultDescription = props.albumDetail
     ? `${props.albumDetail.album.singer} · ${detailTracks.length} 首`
-    : isAlbumMode
-      ? props.albums.length
-        ? `${providerNames[props.provider]} · 当前页 ${props.albums.length} 张`
-        : '输入专辑名称或歌手开始搜索'
-      : props.results.length
-        ? `${providerNames[props.provider]} · 当前页 ${props.results.length} 首`
-        : '输入关键词开始搜索'
+    : shownAlbum?.singer ?? searchResultDescription()
+
+  function searchResultDescription() {
+    const source = providerNames[props.provider]
+    if (props.searching || props.searchError) return source
+    if (isArtistMode) {
+      if (!props.searchedQuery) return '输入歌手名称开始搜索'
+      return `${source} · 当前页 ${props.artists.length} 位`
+    }
+    if (isAlbumMode) {
+      return props.albums.length ? `${source} · 当前页 ${props.albums.length} 张` : '输入专辑名称或歌手开始搜索'
+    }
+    return props.results.length ? `${source} · 当前页 ${props.results.length} 首` : '输入关键词开始搜索'
+  }
 
   return (
     <>
@@ -3720,7 +3789,7 @@ function SearchView(props: SearchViewProps) {
               value={props.query}
               onChange={(event) => props.setQuery(event.target.value)}
               placeholder={
-                isAlbumMode ? '搜索专辑或歌手' : '搜索歌曲、歌手或专辑'
+                isArtistMode ? '搜索歌手' : isAlbumMode ? '搜索专辑或歌手' : '搜索歌曲、歌手或专辑'
               }
               autoFocus
             />
@@ -3732,15 +3801,24 @@ function SearchView(props: SearchViewProps) {
             <div className="search-mode-tabs" aria-label="搜索类型">
               <button
                 className={props.searchMode === 'track' ? 'active' : ''}
+                aria-pressed={props.searchMode === 'track'}
                 onClick={() => props.setSearchMode('track')}
               >
                 歌曲
               </button>
               <button
                 className={props.searchMode === 'album' ? 'active' : ''}
+                aria-pressed={props.searchMode === 'album'}
                 onClick={() => props.setSearchMode('album')}
               >
                 专辑
+              </button>
+              <button
+                className={isArtistMode ? 'active' : ''}
+                aria-pressed={isArtistMode}
+                onClick={() => props.setSearchMode('artist')}
+              >
+                歌手
               </button>
             </div>
             <div className="provider-tabs">
@@ -3764,27 +3842,39 @@ function SearchView(props: SearchViewProps) {
         </div>
       </section>
 
-      <section className="results-section">
+      {props.artist && (
+        <ArtistPage
+          key={`${props.artist.source}_${props.artist.id}`}
+          artist={props.artist}
+          settings={props.settings}
+          scrollRootRef={props.scrollRootRef}
+          hidden={!showArtistPage}
+          onBack={props.onCloseArtist}
+          onOpenAlbum={props.onOpenAlbum}
+        />
+      )}
+      {!showArtistPage && <section className="results-section">
         <div className="results-heading">
           <div>
             <h2>
-              {props.albumDetail
-                ? props.albumDetail.album.name
+              {shownAlbum
+                ? shownAlbum.name
                 : props.searchedQuery
                   ? `“${props.searchedQuery}”`
                   : '搜索结果'}
             </h2>
             <p>{resultDescription}</p>
           </div>
-          {props.albumDetail ? (
+          {shownAlbum ? (
             <button className="album-back-button" onClick={props.onCloseAlbum}>
               <ChevronLeft size={16} />
-              返回专辑结果
+              {props.artist ? '返回歌手页' : '返回专辑结果'}
             </button>
           ) : (
-            props.allPage > 1 && (
+            !props.searchError && props.allPage > 1 && (
               <div className="pagination">
                 <button
+                  aria-label="上一页搜索结果"
                   disabled={props.page <= 1 || props.searching}
                   onClick={() =>
                     props.onSearch(undefined, props.page - 1, props.searchedQuery)
@@ -3796,6 +3886,7 @@ function SearchView(props: SearchViewProps) {
                   {props.page} / {props.allPage}
                 </span>
                 <button
+                  aria-label="下一页搜索结果"
                   disabled={props.page >= props.allPage || props.searching}
                   onClick={() =>
                     props.onSearch(undefined, props.page + 1, props.searchedQuery)
@@ -3808,21 +3899,20 @@ function SearchView(props: SearchViewProps) {
           )}
         </div>
         {props.searchError ? (
-          <div className="inline-error">
+          <div className="inline-error" role="alert">
             <CircleAlert size={20} />
             <div>
-              <strong>搜索失败</strong>
+              <strong>{shownAlbum ? '专辑加载失败' : '搜索失败'}</strong>
               <span>{props.searchError}</span>
             </div>
           </div>
-        ) : props.searching &&
-          (isAlbumMode ? !props.albumDetail : !props.results.length) ? (
-          <div className="loading-state">
+        ) : props.searching ? (
+          <div className="loading-state" role="status">
             <LoaderCircle className="spin" size={28} />
             <span>
-              {props.albums.length && isAlbumMode
+              {shownAlbum
                 ? '正在加载专辑曲目…'
-                : `正在搜索${isAlbumMode ? '专辑' : providerNames[props.provider]}…`}
+                : `正在搜索${isArtistMode ? '歌手' : isAlbumMode ? '专辑' : providerNames[props.provider]}…`}
             </span>
           </div>
         ) : props.albumDetail ? (
@@ -3885,41 +3975,24 @@ function SearchView(props: SearchViewProps) {
                 </button>
               </div>
             </div>
-            <TrackTable
-              tracks={detailTracks}
-              favoriteTrackIds={props.favoriteTrackIds}
-              capabilities={props.capabilities}
-              playQuality={props.playQuality}
-              onPlay={(track) => props.onPlay(track, detailTracks)}
-              onFavorite={props.onFavorite}
-              onDownload={props.onDownload}
-              getDownloadState={props.getDownloadState}
-              onOpenAlbum={props.onOpenTrackAlbum}
-            />
+            {detailTracks.length ? (
+              <TrackTable
+                tracks={detailTracks}
+                favoriteTrackIds={props.favoriteTrackIds}
+                capabilities={props.capabilities}
+                playQuality={props.playQuality}
+                onPlay={(track) => props.onPlay(track, detailTracks)}
+                onFavorite={props.onFavorite}
+                onDownload={props.onDownload}
+                getDownloadState={props.getDownloadState}
+                onOpenAlbum={props.onOpenTrackAlbum}
+              />
+            ) : <p className="artist-message">暂无曲目</p>}
           </>
-        ) : isAlbumMode && props.albums.length ? (
-          <div className="album-grid">
-            {props.albums.map((album) => (
-              <button
-                className="album-card"
-                key={`${album.source}_${album.id}`}
-                onClick={() => props.onOpenAlbum(album)}
-              >
-                <div className="album-card-cover">
-                  <CachedCover url={album.img} fallback={<Music2 size={25} />} />
-                </div>
-                <div className="album-card-info">
-                  <strong>{album.name}</strong>
-                  <span>{album.singer || '未知歌手'}</span>
-                  <small>
-                    {[album.publishTime, album.songCount && `${album.songCount} 首`]
-                      .filter(Boolean)
-                      .join(' · ') || providerNames[album.source]}
-                  </small>
-                </div>
-              </button>
-            ))}
-          </div>
+        ) : isArtistMode ? (
+          props.searchedQuery && <ArtistResults artists={props.artists} onOpen={props.onOpenArtist} />
+        ) : isAlbumMode ? (
+          <AlbumGrid albums={props.albums} onOpen={props.onOpenAlbum} />
         ) : props.results.length ? (
           <TrackTable
             tracks={props.results}
@@ -3933,7 +4006,7 @@ function SearchView(props: SearchViewProps) {
             onOpenAlbum={props.onOpenTrackAlbum}
           />
         ) : null}
-      </section>
+      </section>}
     </>
   )
 }

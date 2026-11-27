@@ -25,9 +25,12 @@ if (cargo.status !== 0 || !cargo.stdout.trim()) {
   console.error(`请先安装 Rust ${channel}：rustup toolchain install ${channel}`)
   process.exitCode = 1
 } else {
+  const toolchainBin = dirname(cargo.stdout.trim())
   const environment = {
     ...process.env,
-    PATH: `${dirname(cargo.stdout.trim())}${process.env.PATH ? `${delimiter}${process.env.PATH}` : ''}`,
+    PATH: `${toolchainBin}${process.env.PATH ? `${delimiter}${process.env.PATH}` : ''}`,
+    RUSTUP_TOOLCHAIN: channel,
+    RUSTC: join(toolchainBin, 'rustc'),
   }
   const signingDirectory = join(homedir(), '.config', 'one-player', 'updater-signing')
   const signingKey = join(signingDirectory, 'one-player.key')
